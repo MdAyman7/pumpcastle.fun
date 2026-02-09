@@ -14,12 +14,15 @@ import { seededRandom } from '$lib/state/CastleState';
 import {
   type TierMaterials,
   type MaterialQuality,
+  type QualityTransition,
   qualityForTier,
   qualityForConstruction,
   createTierMaterials,
   applyDecayToMaterials,
   applyConstructionToMaterials,
   disposeTierMaterials,
+  beginQualityTransition,
+  updateQualityTransition,
 } from './CastleMaterialSystem';
 
 export class CastleMeshBuilder {
@@ -42,6 +45,7 @@ export class CastleMeshBuilder {
   // Materials
   private mats: TierMaterials | null = null;
   private quality: MaterialQuality = 'normal';
+  private qualityTransition: QualityTransition | null = null;
 
   // Torch lights
   private torchLights: THREE.PointLight[] = [];
@@ -109,6 +113,7 @@ export class CastleMeshBuilder {
     }
 
     this.updateScaffolding(state);
+    this.updateQualityTransition(state);
     this.updateMaterialsForDecay(state);
     this.updateFlags(state);
     if (state.isLegendary) this.updateLegendaryEffects(state);
@@ -127,6 +132,20 @@ export class CastleMeshBuilder {
     return Math.floor(progress * 5);
   }
 
+  // ─── Quality transition tick ────────────────────────────────
+
+  private updateQualityTransition(state: RenderState): void {
+    if (!this.qualityTransition || !this.mats) return;
+    const done = updateQualityTransition(
+      this.qualityTransition,
+      this.mats,
+      state.deltaTime / 1000
+    );
+    if (done) {
+      this.qualityTransition = null;
+    }
+  }
+
   // ─── Full rebuild ──────────────────────────────────────────
 
   private rebuildCastle(state: RenderState): void {
@@ -139,22 +158,34 @@ export class CastleMeshBuilder {
     this.torchLights = [];
     this.flagMeshes = [];
 
-    // Dispose old materials
-    if (this.mats) disposeTierMaterials(this.mats);
-
     // Determine quality
     const isFullyBuilt = state.phase !== 'construction';
-    this.quality = isFullyBuilt
+    const newQuality = isFullyBuilt
       ? qualityForTier(state.tier, state.isLegendary)
       : qualityForConstruction(state.smoothConstruction);
 
-    // Create fresh materials
-    this.mats = createTierMaterials(state.tier, this.quality);
+    const qualityChanged = newQuality !== this.quality;
+    const hadMats = this.mats !== null;
+
+    // Create fresh target materials
+    const newMats = createTierMaterials(state.tier, newQuality);
 
     // If still constructing, apply construction roughness
     if (!isFullyBuilt) {
-      applyConstructionToMaterials(this.mats, state.smoothConstruction);
+      applyConstructionToMaterials(newMats, state.smoothConstruction);
     }
+
+    // Start animated transition if quality changed and we had previous materials
+    if (qualityChanged && hadMats && this.mats) {
+      this.qualityTransition = beginQualityTransition(this.mats, newMats, 1.5);
+      disposeTierMaterials(this.mats);
+    } else {
+      this.qualityTransition = null;
+      if (this.mats) disposeTierMaterials(this.mats);
+    }
+
+    this.quality = newQuality;
+    this.mats = newMats;
 
     const progress = isFullyBuilt ? 1 : state.smoothConstruction;
 
@@ -898,21 +929,35 @@ export class CastleMeshBuilder {
     if (!this.mats) return;
 
     const pulse = 0.8 + Math.sin(state.time * 2) * 0.2;
-    const decayFade = 1 - state.smoothDecay * 0.7;
+    const slowPulse = 0.9 + Math.sin(state.time * 1.2) * 0.1;
+    const decayFade = 1 - state.smoothDecay * 0.50; // legendary retains more glow
 
-    // Pulse glow on accent/trim
+    // Pulse glow on accent/trim + clearcoat shimmer
     for (const key of ['accent', 'trim', 'glow'] as const) {
       const mat = this.mats[key];
       if (mat.emissiveIntensity > 0) {
-        const base = key === 'glow' ? 0.6 : (key === 'trim' ? 0.2 : 0.25);
+        const base = key === 'glow' ? 0.70 : (key === 'trim' ? 0.25 : 0.30);
         mat.emissiveIntensity = base * pulse * decayFade;
+      }
+      // Clearcoat shimmer
+      if (mat.clearcoat > 0) {
+        const baseClearcoat = key === 'glow' ? 0.8 : (key === 'trim' ? 0.55 : 0.6);
+        mat.clearcoat = baseClearcoat * slowPulse * (1 - state.smoothDecay * 0.3);
+      }
+    }
+
+    // Subtle sheen pulse on stone
+    for (const key of ['primary', 'secondary'] as const) {
+      const mat = this.mats[key];
+      if (mat.sheen > 0) {
+        mat.sheen = 0.25 * slowPulse * (1 - state.smoothDecay * 0.3);
       }
     }
 
     // Bloom halos pulse
     this.bloomGroup.traverse((child) => {
       if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshBasicMaterial) {
-        child.material.opacity = (0.08 + Math.sin(state.time * 1.5) * 0.04) * decayFade;
+        child.material.opacity = (0.10 + Math.sin(state.time * 1.5) * 0.05) * decayFade;
       }
     });
   }
@@ -1217,6 +1262,7 @@ export class CastleMeshBuilder {
     this.lastDecay = 0;
     this.lastProgress = -1;
     this.builtPhaseIndex = -1;
+    this.qualityTransition = null;
 
     for (const light of this.torchLights) { this.scene.remove(light); light.dispose(); }
     this.torchLights = [];
