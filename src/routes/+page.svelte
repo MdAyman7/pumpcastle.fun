@@ -13,6 +13,7 @@
   } from '$lib/stores/tokenStore';
   import type { WorldState } from '$lib/types';
   import type { WeatherRenderState } from '$lib/state/WeatherState';
+  import type { TimeInfo } from '$lib/state/TimeState';
 
   let containerEl: HTMLElement;
   let renderer: WorldRenderer3D | null = null;
@@ -20,7 +21,10 @@
   let drawerOpen = false;
   let searchFocused = false;
   let weatherInfo: WeatherRenderState | null = null;
+  let timeInfo: TimeInfo | null = null;
+  let showTimeIndicator = true;
   let weatherInterval: ReturnType<typeof setInterval> | null = null;
+  let qualityLevel: string = 'medium';
 
   const presets = [
     { label: 'Construction', address: 'pregrad123456789012345678901234567890123456', icon: '🏗' },
@@ -88,11 +92,26 @@
     drawerOpen = !drawerOpen;
   }
 
+  function setQuality(level: 'low' | 'medium' | 'high') {
+    if (renderer) {
+      renderer.setQualityLevel(level);
+      qualityLevel = level;
+    }
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       if (drawerOpen) drawerOpen = false;
       if (searchFocused) searchFocused = false;
     }
+  }
+
+  function getTimeIcon(period: string): string {
+    const icons: Record<string, string> = {
+      dawn: '🌅', morning: '☀️', midday: '🌞',
+      afternoon: '🌤️', evening: '🌇', dusk: '🌆', night: '🌙'
+    };
+    return icons[period] || '🕐';
   }
 
   function getWeatherIcon(condition: string): string {
@@ -112,20 +131,35 @@
     return `${temp}° ${labels[w.condition] || 'Fair'}`;
   }
 
+  /** Capitalized condition label for HUD */
+  function getConditionLabel(condition: string): string {
+    const labels: Record<string, string> = {
+      clear: 'Clear', cloudy: 'Cloudy', rain: 'Rain',
+      snow: 'Snow', storm: 'Storm', fog: 'Fog'
+    };
+    return labels[condition] || 'Fair';
+  }
+
   onMount(() => {
     renderer = new WorldRenderer3D(containerEl);
     renderer.resize(window.innerWidth, window.innerHeight);
     renderer.start();
+    qualityLevel = renderer.getQualityLevel();
     window.addEventListener('resize', handleResize);
     window.addEventListener('keydown', handleKeydown);
     handlePreset(presets[0].address);
 
-    // Poll weather state from renderer every 2s for UI display
+    // Poll weather + time state from renderer every 2s for UI display
     weatherInterval = setInterval(() => {
       if (renderer) {
         weatherInfo = renderer.getWeatherState();
+        timeInfo = renderer.getTimeInfo();
       }
     }, 2000);
+    // Initial time info immediately
+    if (renderer) {
+      timeInfo = renderer.getTimeInfo();
+    }
   });
 
   onDestroy(() => {
@@ -194,6 +228,32 @@
       </div>
     {/if}
   </div>
+
+  <!-- World HUD: unified time + weather -->
+  {#if timeInfo || weatherInfo}
+    <div
+      class="world-hud"
+      class:legendary={$worldState?.isLegendary}
+      class:night={timeInfo && (timeInfo.period === 'night' || timeInfo.period === 'dusk')}
+      class:evening={timeInfo && (timeInfo.period === 'evening' || timeInfo.period === 'dawn')}
+    >
+      {#if timeInfo}
+        <span class="hud-icon">{getTimeIcon(timeInfo.period)}</span>
+        <span class="hud-period">{timeInfo.periodLabel}</span>
+        <span class="hud-sep">·</span>
+        <span class="hud-time">{timeInfo.formattedTime}</span>
+      {/if}
+      {#if weatherInfo}
+        <span class="hud-sep">·</span>
+        <span class="hud-temp">{Math.round(weatherInfo.temperature)}°C</span>
+        <span class="hud-sep">·</span>
+        <span class="hud-condition">{getConditionLabel(weatherInfo.condition)}</span>
+      {:else}
+        <span class="hud-sep">·</span>
+        <span class="hud-condition">Clear</span>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <!-- Preset buttons strip (top-right, always visible) -->
@@ -222,12 +282,6 @@
     </div>
     {#if $worldState.isLegendary}
       <div class="legendary-pill">🐉 Legendary</div>
-    {/if}
-    {#if weatherInfo}
-      <div class="weather-pill">
-        <span class="weather-icon">{getWeatherIcon(weatherInfo.condition)}</span>
-        <span>{getWeatherLabel(weatherInfo)}</span>
-      </div>
     {/if}
   </div>
 {/if}
@@ -375,9 +429,46 @@
         </div>
       {/if}
 
+      {#if timeInfo}
+        <div class="detail-section">
+          <h4>Time of Day</h4>
+          <div class="detail-row">
+            <span>Period</span>
+            <span class="detail-val">{getTimeIcon(timeInfo.period)} {timeInfo.periodLabel}</span>
+          </div>
+          <div class="detail-row">
+            <span>Local Time</span>
+            <span class="detail-val">{timeInfo.formattedTime}</span>
+          </div>
+        </div>
+      {/if}
+
+      <div class="detail-section">
+        <h4>Graphics Quality</h4>
+        <div class="quality-buttons">
+          <button
+            class="quality-btn"
+            class:active={qualityLevel === 'low'}
+            on:click={() => setQuality('low')}
+          >Low</button>
+          <button
+            class="quality-btn"
+            class:active={qualityLevel === 'medium'}
+            on:click={() => setQuality('medium')}
+          >Medium</button>
+          <button
+            class="quality-btn"
+            class:active={qualityLevel === 'high'}
+            on:click={() => setQuality('high')}
+          >High</button>
+        </div>
+        <p class="quality-hint">Auto-detected: {qualityLevel}. Change if the scene feels slow.</p>
+      </div>
+
       <div class="detail-section hint-section">
         <p>Hold and drag on the scene to orbit the camera</p>
         <p>Weather is based on your location</p>
+        <p>Lighting changes with your local time</p>
         <p>Data refreshes every 15s</p>
       </div>
     </div>
@@ -603,15 +694,92 @@
     color: #fbbf24;
     border: 1px solid rgba(234, 179, 8, 0.25);
   }
-  .weather-pill {
+  /* ---- World HUD (unified time + weather, inline in top-bar) ---- */
+  .world-hud {
     display: flex;
     align-items: center;
-    gap: 4px;
-    background: rgba(255, 255, 255, 0.06);
-    color: #a1a1aa;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    gap: 6px;
+    margin-left: auto;
+    flex-shrink: 0;
+    padding: 4px 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 0.73rem;
+    font-weight: 500;
+    color: rgba(180, 180, 190, 0.85);
+    letter-spacing: 0.01em;
+    user-select: none;
+    pointer-events: none;
+    transition: border-color 0.6s ease, box-shadow 0.6s ease, color 0.4s ease, background 0.4s ease;
   }
-  .weather-icon { font-size: 0.85rem; }
+  .hud-icon {
+    font-size: 0.85rem;
+    line-height: 1;
+  }
+  .hud-period {
+    color: rgba(210, 210, 218, 0.9);
+    font-weight: 600;
+  }
+  .hud-time {
+    font-variant-numeric: tabular-nums;
+    color: rgba(190, 190, 200, 0.8);
+  }
+  .hud-temp {
+    font-variant-numeric: tabular-nums;
+    color: rgba(190, 190, 200, 0.8);
+  }
+  .hud-condition {
+    color: rgba(170, 170, 180, 0.75);
+  }
+  .hud-sep {
+    color: rgba(100, 100, 110, 0.5);
+    font-weight: 300;
+  }
+
+  /* Night mode: slightly brighter text against dark sky */
+  .world-hud.night {
+    background: rgba(8, 8, 14, 0.60);
+    color: rgba(190, 195, 210, 0.90);
+    border-color: rgba(100, 120, 180, 0.12);
+  }
+  .world-hud.night .hud-period {
+    color: rgba(200, 210, 230, 0.95);
+  }
+
+  /* Evening mode: warm tint */
+  .world-hud.evening {
+    border-color: rgba(200, 160, 80, 0.10);
+  }
+  .world-hud.evening .hud-period {
+    color: rgba(230, 210, 180, 0.95);
+  }
+
+  /* Legendary: subtle warm glow border + text accent */
+  .world-hud.legendary {
+    border-color: rgba(234, 179, 8, 0.18);
+    box-shadow:
+      0 0 12px rgba(234, 179, 8, 0.06),
+      inset 0 0 8px rgba(234, 179, 8, 0.03);
+  }
+  .world-hud.legendary .hud-period {
+    color: rgba(251, 191, 36, 0.90);
+  }
+  .world-hud.legendary .hud-time {
+    color: rgba(240, 220, 180, 0.85);
+  }
+  .world-hud.legendary .hud-sep {
+    color: rgba(200, 170, 80, 0.40);
+  }
+
+  /* Legendary + night: enhanced glow — the HUD glows like the castle */
+  .world-hud.legendary.night {
+    border-color: rgba(255, 200, 60, 0.22);
+    box-shadow:
+      0 0 16px rgba(255, 210, 80, 0.08),
+      0 0 4px rgba(255, 200, 60, 0.04),
+      inset 0 0 10px rgba(255, 210, 80, 0.04);
+  }
 
   /* ---- Bottom-right stats ---- */
   .stats-bar {
@@ -810,6 +978,38 @@
     transition: width 0.4s ease;
   }
 
+  .quality-buttons {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .quality-btn {
+    flex: 1;
+    padding: 6px 0;
+    font-size: 0.75rem;
+    font-weight: 500;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 6px;
+    color: #a1a1aa;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .quality-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #e4e4e7;
+  }
+  .quality-btn.active {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: rgba(34, 197, 94, 0.4);
+    color: #22c55e;
+  }
+  .quality-hint {
+    margin: 6px 0 0;
+    font-size: 0.68rem;
+    color: #52525b;
+  }
+
   .hint-section {
     margin-top: auto;
     padding-top: 12px;
@@ -858,5 +1058,18 @@
     }
     .chip-label { display: none; }
     .preset-chip { padding: 5px 8px; }
+
+    /* HUD: compact on mobile */
+    .world-hud {
+      font-size: 0.65rem;
+      padding: 3px 8px;
+      gap: 4px;
+    }
+    .hud-icon { font-size: 0.72rem; }
+    /* Hide condition & period on small screens, keep icon + time + temp */
+    .hud-condition { display: none; }
+    .hud-period { display: none; }
+    /* Hide the separator after hidden period */
+    .hud-period + .hud-sep { display: none; }
   }
 </style>

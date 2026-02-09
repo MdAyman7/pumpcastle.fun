@@ -4,3 +4,4 @@ export * from './ActivityState';
 export * from './GraduationState';
 export * from './MemoryState';
 export * from './WeatherState';
+export * from './TimeState';

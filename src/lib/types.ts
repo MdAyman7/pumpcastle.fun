@@ -73,6 +73,11 @@ export interface RenderState extends WorldState {
 
   // Celebration state
   celebrationProgress: number; // 0-1 during graduation celebration
+
+  // Day/night
+  dayPhase: number;      // 0 = midnight, 0.5 = noon (raw clock phase)
+  nightFactor: number;   // 0 = full day, 1 = full night (smooth)
+  eveningFactor: number; // 0 = not evening, 1 = peak golden hour
 }
 
 // Builder NPC state

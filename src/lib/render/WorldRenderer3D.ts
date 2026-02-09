@@ -13,6 +13,8 @@
 import * as THREE from 'three';
 import type { TokenData, WorldState, RenderState } from '$lib/types';
 import { computeWorldState, hashString, seededRandom } from '$lib/state/CastleState';
+import { computeTimeInfo } from '$lib/state/TimeState';
+import type { TimeInfo } from '$lib/state/TimeState';
 import { getCelebrationProgress, resetGraduationState } from '$lib/state/GraduationState';
 import { MemoryState } from '$lib/state/MemoryState';
 import { WeatherState } from '$lib/state/WeatherState';
@@ -27,6 +29,8 @@ import { PhysicsMotion } from './PhysicsMotion';
 import { MemoryRenderer } from './MemoryRenderer';
 import { OuterWorldBuilder } from './OuterWorldBuilder';
 import { WeatherEffects } from './WeatherEffects';
+import { qualitySettings } from './QualitySettings';
+import type { QualityConfig } from './QualitySettings';
 
 export class WorldRenderer3D {
   // Three.js core
@@ -60,6 +64,18 @@ export class WorldRenderer3D {
   private ambientLight!: THREE.AmbientLight;
   private hemiLight!: THREE.HemisphereLight;
   private moonLight!: THREE.DirectionalLight;
+
+  // Castle-focused lights (make castle pop against environment)
+  private castleKeyLight!: THREE.SpotLight;
+  private castleRimLight!: THREE.DirectionalLight;
+
+  // Sky dome + atmosphere
+  private skyDome!: THREE.Mesh;
+  private skyDomeColors!: Float32Array; // vertex color buffer
+  private cloudGroup!: THREE.Group;
+  private cloudMeshes: THREE.Mesh[] = [];
+  private hazeMesh!: THREE.Mesh;
+  private hazeMaterial!: THREE.MeshBasicMaterial;
 
   // State
   private currentTokenData: TokenData | null = null;
@@ -107,15 +123,23 @@ export class WorldRenderer3D {
   private targetFogFar: number = 100;
   private currentSunColor: THREE.Color;
   private targetSunColor: THREE.Color;
-  private currentSunIntensity: number = 1.2;
-  private targetSunIntensity: number = 1.2;
-  private currentAmbientIntensity: number = 0.4;
-  private targetAmbientIntensity: number = 0.4;
+  private currentSunIntensity: number = 1.8;
+  private targetSunIntensity: number = 1.8;
+  private currentAmbientIntensity: number = 0.7;
+  private targetAmbientIntensity: number = 0.7;
 
   // Day / night (0-1 where 0=midnight, 0.5=noon)
   private dayPhase: number = 0.5;
   private currentExposure: number = 1.0;
   private targetExposure: number = 1.0;
+
+  // Quality system
+  private qualityConfig: QualityConfig;
+  private frameCount: number = 0;
+  private lastSkyDaylight: number = -1; // cache sky dome updates
+
+  // Reusable fog object (avoid creating new THREE.Fog every frame)
+  private fog: THREE.Fog;
 
   // Seed
   private seed: number = 12345;
@@ -133,24 +157,24 @@ export class WorldRenderer3D {
     this.width = container.clientWidth || window.innerWidth;
     this.height = container.clientHeight || window.innerHeight;
     this.clock = new THREE.Clock();
+    this.qualityConfig = qualitySettings.getConfig();
 
-    // Renderer
+    // Renderer — quality-aware
     this.renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: this.qualityConfig.antialias,
       alpha: false,
       powerPreference: 'high-performance'
     });
     this.renderer.setSize(this.width, this.height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.qualityConfig.pixelRatio));
+    this.renderer.shadowMap.enabled = this.qualityConfig.shadowsEnabled;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     container.appendChild(this.renderer.domElement);
 
-    // Scene
+    // Scene — no flat background color; sky dome handles the sky
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x87ceeb);
 
     // Camera – wider FOV to see more of the world
     this.camera = new THREE.PerspectiveCamera(55, this.width / this.height, 0.1, 1000);
@@ -162,11 +186,20 @@ export class WorldRenderer3D {
     // Atmosphere
     this.currentFogColor = new THREE.Color(0x87ceeb);
     this.targetFogColor = new THREE.Color(0x87ceeb);
-    this.currentSunColor = new THREE.Color(0xffeedd);
-    this.targetSunColor = new THREE.Color(0xffeedd);
+    this.currentSunColor = new THREE.Color(0xfff4e0);
+    this.targetSunColor = new THREE.Color(0xfff4e0);
+
+    // Reusable fog object (mutated each frame, no allocation)
+    this.fog = new THREE.Fog(0x87ceeb, 30, 100);
+    this.scene.fog = this.fog;
 
     // Lighting
     this.setupLighting();
+
+    // Sky dome + atmosphere
+    this.buildSkyDome();
+    this.buildClouds();
+    this.buildHaze();
 
     // Builders
     this.castleBuilder = new CastleMeshBuilder(this.scene, this.seed);
@@ -240,6 +273,19 @@ export class WorldRenderer3D {
     return Math.max(0, Math.min(1, factor));
   }
 
+  /**
+   * Compute an "evening factor" that peaks during golden hour.
+   * 0 = not evening, 1 = peak golden hour.
+   * Golden hour: daylight ≈ 0.15–0.40 (sunrise/sunset transition zone).
+   */
+  private getEveningFactor(): number {
+    const daylight = this.getDaylightFactor();
+    // Peak at daylight = 0.25, taper off both sides
+    if (daylight < 0.10 || daylight > 0.50) return 0;
+    if (daylight < 0.25) return (daylight - 0.10) / 0.15; // ramp up
+    return 1 - (daylight - 0.25) / 0.25; // ramp down
+  }
+
   /** Apply day/night to sun light position & base atmosphere */
   private updateDayNightCycle(): void {
     // Refresh every frame from real clock (low cost)
@@ -247,6 +293,8 @@ export class WorldRenderer3D {
 
     const sunAngle = this.getSunAngle();
     const daylight = this.getDaylightFactor();
+    const nightFactor = 1 - daylight;
+    const eveningFactor = this.getEveningFactor();
 
     // Position the directional sun light on an arc
     const sunDist = 25;
@@ -254,50 +302,156 @@ export class WorldRenderer3D {
     const sunZ = Math.cos(sunAngle) * sunDist * 0.6;
     this.sunLight.position.set(10, Math.max(1, sunY), sunZ);
 
-    // Sun intensity scales with daylight – brighter overall
-    const baseSunIntensity = 0.25 + daylight * 1.35; // 0.25 at night → 1.6 at noon
+    // Sun intensity — bright and dominant at noon, warm glow during evening, soft fill at night
+    // Night: 0.65 (cinematic — clearly readable terrain, not pitch black)
+    // Noon: 2.0 (bright, lively — ACES tonemapping compresses this naturally)
+    const baseSunIntensity = 0.65 + daylight * 1.35;
     this.sunLight.intensity = baseSunIntensity;
 
-    // Sun color shifts: warm sunrise/sunset, white midday, blue-ish near horizon
-    if (daylight < 0.15) {
-      // Night
-      this.sunLight.color.setHex(0x334466);
-    } else if (daylight < 0.4) {
-      // Sunrise/sunset
-      const t = (daylight - 0.15) / 0.25;
-      this.sunLight.color.setHex(0xffa060).lerp(new THREE.Color(0xffeedd), t);
+    // Sun color shifts: warm golden during evening, cool-warm at night, white midday
+    if (daylight < 0.10) {
+      // Deep night: soft blue-silver (cinematic moonlit ambiance, not dark indigo)
+      this.sunLight.color.setHex(0x5a6a90);
+    } else if (daylight < 0.20) {
+      // Late dusk / early dawn: deep warm transition
+      const t = (daylight - 0.10) / 0.10;
+      this.sunLight.color.setHex(0x5a6a90).lerp(new THREE.Color(0xff8040), t);
+    } else if (daylight < 0.40) {
+      // Golden hour: rich amber → warm sunny white
+      const t = (daylight - 0.20) / 0.20;
+      this.sunLight.color.setHex(0xff8040).lerp(new THREE.Color(0xfff4e0), t);
     } else {
-      // Daytime
-      this.sunLight.color.setHex(0xffeedd);
+      // Daytime: warm sunny white (slight yellow tint — pleasant afternoon feel)
+      this.sunLight.color.setHex(0xfff4e0);
     }
 
-    // Moon light (subtle blue fill at night)
-    const nightFactor = 1 - daylight;
-    this.moonLight.intensity = nightFactor * 0.25;
+    // Evening warmth boost: during golden hour, push sun color warmer
+    if (eveningFactor > 0) {
+      this.sunLight.color.lerp(new THREE.Color(0xFFB060), eveningFactor * 0.35);
+    }
 
-    // Ambient – brighter fill
-    this.ambientLight.intensity = 0.25 + daylight * 0.45;
+    // Moon light — cool blue-silver fill for clearly readable nights
+    // Wide and high for maximum terrain coverage. Intensity scaled to
+    // ensure distant hills catch enough light to remain visible.
+    this.moonLight.color.setHex(0x8098cc);
+    this.moonLight.intensity = nightFactor * 1.0;
+    // Very high position + wide offset = broad moonlight wash across whole scene
+    this.moonLight.position.set(-15, 28, -6);
 
-    // Hemi sky color
+    // Ambient — lifts shadows without flattening. Higher during day.
+    // 0.60 at night → 0.90 at noon (strong night ambient = no black terrain)
+    this.ambientLight.intensity = 0.60 + daylight * 0.30;
+
+    // Ambient color: cool blue at night (cinematic), warm-neutral during day
+    if (eveningFactor > 0) {
+      this.ambientLight.color.setHex(0x708090).lerp(
+        new THREE.Color(0x907060), eveningFactor * 0.4
+      );
+    } else if (nightFactor > 0.5) {
+      // Night: cool blue ambient — everything gets soft blue fill
+      // This is the key to readable nights: strong cool-toned ambient
+      const nightBlueness = (nightFactor - 0.5) / 0.5;
+      this.ambientLight.color.setHex(0x708090).lerp(
+        new THREE.Color(0x6878a8), nightBlueness * 0.5
+      );
+    } else if (daylight > 0.5) {
+      // Clear daytime: warm sky-bounce ambient (not cold blue-grey)
+      this.ambientLight.color.setHex(0x708090).lerp(
+        new THREE.Color(0x90887a), (daylight - 0.5) / 0.5 * 0.3
+      );
+    } else {
+      this.ambientLight.color.setHex(0x708090);
+    }
+
+    // Hemi sky color — richer transitions
     const dayColor = new THREE.Color(0x87ceeb);
-    const nightColor = new THREE.Color(0x0a0e1a);
+    const nightColor = new THREE.Color(0x384868); // moonlit blue (sky contributes real light)
     const sunriseColor = new THREE.Color(0xffa070);
+    const eveningColor = new THREE.Color(0xE8A060); // warm golden sky
     let skyColor: THREE.Color;
-    if (daylight < 0.15) {
+    if (daylight < 0.10) {
       skyColor = nightColor;
-    } else if (daylight < 0.35) {
-      const t = (daylight - 0.15) / 0.2;
+    } else if (daylight < 0.25) {
+      const t = (daylight - 0.10) / 0.15;
       skyColor = nightColor.clone().lerp(sunriseColor, t);
-    } else if (daylight < 0.5) {
-      const t = (daylight - 0.35) / 0.15;
+    } else if (daylight < 0.45) {
+      const t = (daylight - 0.25) / 0.20;
       skyColor = sunriseColor.clone().lerp(dayColor, t);
     } else {
       skyColor = dayColor;
     }
+    // Warm golden overlay during evening
+    if (eveningFactor > 0) {
+      skyColor.lerp(eveningColor, eveningFactor * 0.3);
+    }
     this.hemiLight.color.copy(skyColor);
 
-    // Target exposure – brighter overall
-    this.targetExposure = 0.5 + daylight * 0.9; // 0.5 at night, 1.4 at noon
+    // Hemi intensity scales with daylight — strong sky bounce at all times.
+    // The hemisphere light IS the sky illumination on terrain — at night, the
+    // sky color (blue) paints everything with cool ambient light. This is the
+    // single most important light for preventing black terrain at night.
+    // 0.50 at night → 0.80 at noon
+    this.hemiLight.intensity = 0.50 + daylight * 0.30;
+
+    // Hemi ground color — at night, ground bounce is cool blue-grey (moonlit earth).
+    // Brighter ground color = upward fill that lifts undersides of hills/trees.
+    const dayGround = new THREE.Color(0x5a7a50); // brighter green ground bounce
+    const nightGround = new THREE.Color(0x304858); // cool blue-grey (visible uplight)
+    this.hemiLight.groundColor.copy(dayGround).lerp(nightGround, nightFactor);
+
+    // Target exposure — bright and clear during day, readable at night
+    // Day peak: 1.55 (ACES tonemapping compresses — needs higher input)
+    // Night floor: 0.90 (cinematic — ACES needs high input to stay readable)
+    this.targetExposure = 0.90 + daylight * 0.65 + eveningFactor * 0.08;
+
+    // ── Castle-focused lights ──────────────────────────────────
+    // Key light: warm spotlight gives castle extra illumination.
+    // Strongest during clear day, warm amber beacon at night.
+    //
+    // Day: 0.80 warm-white (castle pops against grass)
+    // Night: 0.40 warm amber (castle clearly reads as focal point)
+    // Evening: warm golden boost
+    const castleKeyBase = 0.40 + daylight * 0.40;
+    this.castleKeyLight.intensity = castleKeyBase + eveningFactor * 0.15;
+
+    // Key light color: matches sun but slightly warmer to favor castle
+    if (daylight > 0.4) {
+      this.castleKeyLight.color.setHex(0xfff8ee); // warm white
+    } else if (eveningFactor > 0) {
+      this.castleKeyLight.color.setHex(0xfff8ee).lerp(
+        new THREE.Color(0xffc870), eveningFactor * 0.3
+      );
+    } else {
+      // Night: warm amber fill
+      this.castleKeyLight.color.setHex(0xffe0a0).lerp(
+        new THREE.Color(0xfff8ee), daylight * 3 // transition from amber to white
+      );
+    }
+
+    // Rim light: creates edge separation so castle silhouette is clear.
+    // Cool-toned during day (sky-like backlight), cool-silver at night.
+    // Stronger at night to ensure castle reads against dark sky.
+    //
+    // Day: 0.45 (clear edge definition against green terrain)
+    // Night: 0.35 (strong moonlit edge — castle silhouette always readable)
+    // Evening: warmer, golden edge glow
+    const rimBase = 0.35 + daylight * 0.10;
+    this.castleRimLight.intensity = rimBase + eveningFactor * 0.10;
+
+    if (daylight > 0.4) {
+      // Daytime: cool sky-bounce backlight (lifts edges without yellowing)
+      this.castleRimLight.color.setHex(0xc0d8f0);
+    } else if (eveningFactor > 0) {
+      // Evening: warm golden edge
+      this.castleRimLight.color.setHex(0xc0d8f0).lerp(
+        new THREE.Color(0xf0c888), eveningFactor * 0.4
+      );
+    } else if (nightFactor > 0.5) {
+      // Night: brighter cool-silver moonlit edge (ensures silhouette reads)
+      this.castleRimLight.color.setHex(0x9aaccc);
+    } else {
+      this.castleRimLight.color.setHex(0xc0d8f0);
+    }
   }
 
   // ─── Mouse-hold orbit ────────────────────────────────────
@@ -337,34 +491,402 @@ export class WorldRenderer3D {
   // ─── Lighting setup ──────────────────────────────────────
 
   private setupLighting(): void {
-    // Brighter ambient for less harsh shadows
-    this.ambientLight = new THREE.AmbientLight(0x607080, 0.6);
+    // Ambient: warm-neutral fill, lifts shadows without flattening
+    this.ambientLight = new THREE.AmbientLight(0x708090, 0.7);
     this.scene.add(this.ambientLight);
 
-    // Sun – slightly softer shadows, wider coverage
-    this.sunLight = new THREE.DirectionalLight(0xffeedd, 1.4);
+    // Sun – warm sunny white, dominant directional light
+    // Shadow quality scales with device capability
+    const qc = this.qualityConfig;
+    this.sunLight = new THREE.DirectionalLight(0xfff4e0, 1.8);
     this.sunLight.position.set(15, 25, 12);
-    this.sunLight.castShadow = true;
-    this.sunLight.shadow.mapSize.width = 2048;
-    this.sunLight.shadow.mapSize.height = 2048;
+    this.sunLight.castShadow = qc.shadowsEnabled;
+    this.sunLight.shadow.mapSize.width = qc.shadowMapSize;
+    this.sunLight.shadow.mapSize.height = qc.shadowMapSize;
     this.sunLight.shadow.camera.near = 0.5;
-    this.sunLight.shadow.camera.far = 80;
-    this.sunLight.shadow.camera.left = -35;
-    this.sunLight.shadow.camera.right = 35;
-    this.sunLight.shadow.camera.top = 35;
-    this.sunLight.shadow.camera.bottom = -35;
+    this.sunLight.shadow.camera.far = 60;
+    this.sunLight.shadow.camera.left = -qc.shadowCameraRange;
+    this.sunLight.shadow.camera.right = qc.shadowCameraRange;
+    this.sunLight.shadow.camera.top = qc.shadowCameraRange;
+    this.sunLight.shadow.camera.bottom = -qc.shadowCameraRange;
     this.sunLight.shadow.bias = -0.0001;
     this.sunLight.shadow.normalBias = 0.02;
     this.scene.add(this.sunLight);
 
-    // Stronger hemisphere for fill light
-    this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x4a6a40, 0.5);
+    // Hemisphere: sky/ground bounce fill — bright day, dim night
+    this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x5a7a50, 0.6);
     this.scene.add(this.hemiLight);
 
     // Moonlight
     this.moonLight = new THREE.DirectionalLight(0x4466aa, 0);
     this.moonLight.position.set(-10, 15, -10);
     this.scene.add(this.moonLight);
+
+    // ── Castle-focused lights ──────────────────────────────────
+    // These give the castle extra visual weight vs the environment.
+    // The key light is a tight spotlight aimed at the castle center,
+    // adding ~25% more illumination than the surrounding terrain receives.
+    // The rim light comes from behind/above to give edge separation.
+
+    // Castle key light: warm spotlight from slightly in front and above
+    this.castleKeyLight = new THREE.SpotLight(0xfff8ee, 0, 40);
+    this.castleKeyLight.position.set(5, 22, 18);
+    this.castleKeyLight.target.position.set(0, 4, 0); // castle center
+    this.castleKeyLight.angle = Math.PI / 6; // 30° cone — covers castle area
+    this.castleKeyLight.penumbra = 0.8;       // very soft falloff
+    this.castleKeyLight.decay = 1.5;
+    this.castleKeyLight.castShadow = false;   // main sun already casts shadows
+    this.scene.add(this.castleKeyLight);
+    this.scene.add(this.castleKeyLight.target);
+
+    // Castle rim/back light: cool-warm directional from behind
+    // Creates edge definition so the castle silhouette reads clearly
+    this.castleRimLight = new THREE.DirectionalLight(0xc0d8f0, 0);
+    this.castleRimLight.position.set(-8, 16, -14); // behind and above
+    this.castleRimLight.target.position.set(0, 4, 0);
+    this.castleRimLight.castShadow = false;
+    this.scene.add(this.castleRimLight);
+    this.scene.add(this.castleRimLight.target);
+  }
+
+  // ─── Sky dome ────────────────────────────────────────────
+
+  /**
+   * Build a large inverted sphere as the sky dome.
+   * Uses vertex colors for a smooth gradient:
+   *   Zenith  → deeper blue (rich sky overhead)
+   *   Mid-sky → standard sky blue
+   *   Horizon → warm, lighter (atmospheric scattering)
+   *
+   * The dome is enormous (radius 300) so it always surrounds the world.
+   * BackSide rendering so the inside is visible.
+   */
+  private buildSkyDome(): void {
+    const radius = 300;
+    const widthSegments = 32;
+    const heightSegments = 16;
+    const geom = new THREE.SphereGeometry(radius, widthSegments, heightSegments);
+
+    // Vertex colors: gradient based on vertical position (y-normalized)
+    const positions = geom.attributes.position;
+    const vertexCount = positions.count;
+    this.skyDomeColors = new Float32Array(vertexCount * 3);
+
+    // Default: daytime palette (will be updated per frame)
+    const zenithColor = new THREE.Color(0x4a8ac7);   // deeper blue overhead
+    const midColor = new THREE.Color(0x87ceeb);       // standard sky blue
+    const horizonColor = new THREE.Color(0xc8dce8);   // warm, pale (atmospheric)
+    const belowColor = new THREE.Color(0x90a8b8);     // muted below-horizon
+
+    for (let i = 0; i < vertexCount; i++) {
+      const y = positions.getY(i);
+      // Normalize: 1 = top (zenith), 0 = equator (horizon), negative = below
+      const normalizedY = y / radius;
+
+      let c: THREE.Color;
+      if (normalizedY > 0.6) {
+        // Upper sky: zenith color
+        c = zenithColor.clone();
+      } else if (normalizedY > 0.15) {
+        // Mid to upper sky: blend zenith → mid
+        const t = (normalizedY - 0.15) / 0.45;
+        c = midColor.clone().lerp(zenithColor, t);
+      } else if (normalizedY > -0.05) {
+        // Horizon band: blend mid → warm horizon
+        const t = (normalizedY + 0.05) / 0.20;
+        c = horizonColor.clone().lerp(midColor, t);
+      } else {
+        // Below horizon: muted
+        const t = Math.max(0, (normalizedY + 0.5) / 0.45);
+        c = belowColor.clone().lerp(horizonColor, t);
+      }
+
+      this.skyDomeColors[i * 3] = c.r;
+      this.skyDomeColors[i * 3 + 1] = c.g;
+      this.skyDomeColors[i * 3 + 2] = c.b;
+    }
+
+    geom.setAttribute('color', new THREE.BufferAttribute(this.skyDomeColors, 3));
+
+    const mat = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      side: THREE.BackSide,
+      fog: false,           // sky dome is not fogged
+      depthWrite: false,    // render behind everything
+    });
+
+    this.skyDome = new THREE.Mesh(geom, mat);
+    this.skyDome.renderOrder = -100; // render first
+    this.scene.add(this.skyDome);
+  }
+
+  /**
+   * Build a set of cloud planes at various altitudes.
+   * Uses large, semi-transparent, billboard-like planes with soft edges.
+   * Clouds are subtle — they add depth and scale, not drama.
+   */
+  private buildClouds(): void {
+    this.cloudGroup = new THREE.Group();
+    this.cloudGroup.name = 'clouds';
+
+    // Cloud definitions: position, size, rotation, opacity
+    const allCloudDefs = [
+      // High, wispy clouds (cirrus-like)
+      { x: -60, y: 55, z: -80, w: 50, h: 12, rot: 0.2, opacity: 0.12 },
+      { x: 40, y: 60, z: -100, w: 65, h: 15, rot: -0.15, opacity: 0.10 },
+      { x: -20, y: 65, z: -120, w: 80, h: 10, rot: 0.08, opacity: 0.08 },
+      { x: 80, y: 50, z: -70, w: 45, h: 14, rot: 0.3, opacity: 0.11 },
+      // Mid-level clouds
+      { x: -90, y: 40, z: -60, w: 55, h: 16, rot: -0.1, opacity: 0.13 },
+      { x: 60, y: 45, z: -90, w: 60, h: 13, rot: 0.25, opacity: 0.10 },
+      { x: 0, y: 48, z: -110, w: 70, h: 11, rot: -0.05, opacity: 0.09 },
+      // Distant horizon clouds
+      { x: -40, y: 30, z: -140, w: 90, h: 18, rot: 0.02, opacity: 0.14 },
+      { x: 50, y: 28, z: -130, w: 75, h: 20, rot: -0.08, opacity: 0.12 },
+      { x: -100, y: 35, z: -110, w: 60, h: 14, rot: 0.12, opacity: 0.11 },
+    ];
+
+    // Quality-aware: only render configured number of clouds
+    const cloudDefs = allCloudDefs.slice(0, this.qualityConfig.cloudCount);
+
+    for (const def of cloudDefs) {
+      const geom = new THREE.PlaneGeometry(def.w, def.h);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: def.opacity,
+        fog: false,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const cloud = new THREE.Mesh(geom, mat);
+      cloud.position.set(def.x, def.y, def.z);
+      cloud.rotation.x = -0.15; // tilt slightly to face camera area
+      cloud.rotation.z = def.rot;
+      cloud.renderOrder = -90; // after sky dome, before scene
+      this.cloudGroup.add(cloud);
+      this.cloudMeshes.push(cloud);
+    }
+
+    this.scene.add(this.cloudGroup);
+  }
+
+  /**
+   * Build a horizon haze ring — a large translucent cylinder near the ground
+   * that simulates atmospheric scattering / haze at the horizon line.
+   * Gives the impression of depth and distance.
+   */
+  private buildHaze(): void {
+    // Thin cylinder ring at the horizon
+    const geom = new THREE.CylinderGeometry(180, 200, 25, 32, 1, true);
+    this.hazeMaterial = new THREE.MeshBasicMaterial({
+      color: 0xc8dce8,
+      transparent: true,
+      opacity: 0.08,
+      fog: false,
+      depthWrite: false,
+      side: THREE.BackSide,
+    });
+    this.hazeMesh = new THREE.Mesh(geom, this.hazeMaterial);
+    this.hazeMesh.position.y = 5; // slightly above ground
+    this.hazeMesh.renderOrder = -80;
+    this.scene.add(this.hazeMesh);
+  }
+
+  /**
+   * Update sky dome vertex colors, cloud appearance, and haze based on
+   * daylight factor, evening factor, and weather conditions.
+   * OPTIMIZED: sky dome vertex colors only update when daylight changes
+   * beyond a threshold OR on a throttled interval. Clouds/haze update
+   * every frame (cheap — just opacity/color sets).
+   */
+  private updateSky(weather?: WeatherRenderState): void {
+    const daylight = this.getDaylightFactor();
+    const nightFactor = 1 - daylight;
+    const eveningFactor = this.getEveningFactor();
+    const skyInterval = this.qualityConfig.skyUpdateInterval;
+
+    // Determine if we need to update sky dome vertex colors this frame
+    const daylightChanged = Math.abs(daylight - this.lastSkyDaylight) > 0.005;
+    const shouldUpdateSkyDome = daylightChanged ||
+      qualitySettings.shouldUpdateThisFrame(this.frameCount, skyInterval);
+
+    // ─── Sky dome gradient colors by time of day ─────────────
+    // Day: blue zenith → pale horizon
+    // Night: deep navy → dark blue-grey horizon
+    // Evening/dawn: warm amber/orange tones blended in
+
+    let zenith: THREE.Color;
+    let mid: THREE.Color;
+    let horizon: THREE.Color;
+    let below: THREE.Color;
+
+    if (daylight < 0.10) {
+      // Night: soft deep blues (cinematic — never pure black)
+      // Brighter than realistic so terrain/trees read as silhouettes
+      zenith = new THREE.Color(0x101830);
+      mid = new THREE.Color(0x182440);
+      horizon = new THREE.Color(0x283850);
+      below = new THREE.Color(0x141e35);
+    } else if (daylight < 0.25) {
+      // Dawn/dusk transition — starting colors match night sky dome values
+      const t = (daylight - 0.10) / 0.15;
+      zenith = new THREE.Color(0x101830).lerp(new THREE.Color(0x2a4a7a), t);
+      mid = new THREE.Color(0x182440).lerp(new THREE.Color(0xd08858), t);
+      horizon = new THREE.Color(0x283850).lerp(new THREE.Color(0xf0a868), t);
+      below = new THREE.Color(0x141e35).lerp(new THREE.Color(0xc89060), t);
+    } else if (daylight < 0.45) {
+      // Sunrise/sunset → day transition
+      const t = (daylight - 0.25) / 0.20;
+      zenith = new THREE.Color(0x2a4a7a).lerp(new THREE.Color(0x4a8ac7), t);
+      mid = new THREE.Color(0xd08858).lerp(new THREE.Color(0x87ceeb), t);
+      horizon = new THREE.Color(0xf0a868).lerp(new THREE.Color(0xc8dce8), t);
+      below = new THREE.Color(0xc89060).lerp(new THREE.Color(0x90a8b8), t);
+    } else {
+      // Full day
+      zenith = new THREE.Color(0x4a8ac7);
+      mid = new THREE.Color(0x87ceeb);
+      horizon = new THREE.Color(0xc8dce8);
+      below = new THREE.Color(0x90a8b8);
+    }
+
+    // Evening golden hour warm tint
+    if (eveningFactor > 0) {
+      zenith.lerp(new THREE.Color(0x6a5a80), eveningFactor * 0.2);
+      mid.lerp(new THREE.Color(0xd0a060), eveningFactor * 0.25);
+      horizon.lerp(new THREE.Color(0xf0b868), eveningFactor * 0.35);
+      below.lerp(new THREE.Color(0xd0a060), eveningFactor * 0.3);
+    }
+
+    // Weather overlays on sky colors
+    if (weather) {
+      // Clouds: slightly grey out the sky
+      if (weather.cloudiness > 0.2) {
+        const cloudGrey = weather.cloudiness * 0.25;
+        const greyColor = new THREE.Color(0x8899aa);
+        zenith.lerp(greyColor, cloudGrey);
+        mid.lerp(greyColor, cloudGrey);
+        horizon.lerp(greyColor, cloudGrey * 0.7);
+      }
+      // Rain: darken sky significantly
+      if (weather.rainIntensity > 0.1) {
+        const rainDark = weather.rainIntensity * 0.3;
+        const stormColor = new THREE.Color(0x4a5060);
+        zenith.lerp(stormColor, rainDark);
+        mid.lerp(stormColor, rainDark);
+        horizon.lerp(new THREE.Color(0x6a7080), rainDark);
+      }
+      // Cold/snow: cool blue wash
+      if (weather.coldFactor > 0.2) {
+        const coolTint = weather.coldFactor * 0.15;
+        zenith.lerp(new THREE.Color(0x5a7aaa), coolTint);
+        horizon.lerp(new THREE.Color(0xc0d8f0), coolTint);
+      }
+      // Heat: warm golden sky
+      if (weather.heatFactor > 0.1) {
+        const heatTint = weather.heatFactor * 0.12;
+        zenith.lerp(new THREE.Color(0x6a8aaa), heatTint);
+        mid.lerp(new THREE.Color(0xa0c0c0), heatTint);
+        horizon.lerp(new THREE.Color(0xf0d8a8), heatTint);
+      }
+    }
+
+    // Write vertex colors (only when needed — throttled by quality setting)
+    if (shouldUpdateSkyDome) {
+      this.lastSkyDaylight = daylight;
+      const positions = this.skyDome.geometry.attributes.position;
+      const colors = this.skyDome.geometry.attributes.color;
+      const vertexCount = positions.count;
+      const radius = 300;
+
+      for (let i = 0; i < vertexCount; i++) {
+        const y = positions.getY(i);
+        const normalizedY = y / radius;
+
+        let c: THREE.Color;
+        if (normalizedY > 0.6) {
+          c = zenith.clone();
+        } else if (normalizedY > 0.15) {
+          const t = (normalizedY - 0.15) / 0.45;
+          c = mid.clone().lerp(zenith, t);
+        } else if (normalizedY > -0.05) {
+          const t = (normalizedY + 0.05) / 0.20;
+          c = horizon.clone().lerp(mid, t);
+        } else {
+          const t = Math.max(0, (normalizedY + 0.5) / 0.45);
+          c = below.clone().lerp(horizon, t);
+        }
+
+        colors.setXYZ(i, c.r, c.g, c.b);
+      }
+      colors.needsUpdate = true;
+    }
+
+    // ─── Cloud opacity and color by time of day ─────────────
+    for (let i = 0; i < this.cloudMeshes.length; i++) {
+      const cloud = this.cloudMeshes[i];
+      const mat = cloud.material as THREE.MeshBasicMaterial;
+      const baseDef = [0.12, 0.10, 0.08, 0.11, 0.13, 0.10, 0.09, 0.14, 0.12, 0.11];
+      let baseOpacity = baseDef[i] || 0.10;
+
+      // Night: clouds barely visible (just faint silhouettes)
+      baseOpacity *= (0.15 + daylight * 0.85);
+
+      // Evening: warm-tinted clouds, slightly brighter
+      if (eveningFactor > 0) {
+        mat.color.setHex(0xffffff).lerp(new THREE.Color(0xf0c080), eveningFactor * 0.4);
+        baseOpacity *= (1 + eveningFactor * 0.3);
+      } else if (nightFactor > 0.5) {
+        mat.color.setHex(0x8090a0); // muted blue-grey at night
+      } else {
+        mat.color.setHex(0xffffff);
+      }
+
+      // Weather: more clouds = higher opacity
+      if (weather && weather.cloudiness > 0.2) {
+        baseOpacity += weather.cloudiness * 0.08;
+      }
+
+      mat.opacity = Math.min(0.25, baseOpacity);
+
+      // Gentle cloud drift animation
+      cloud.position.x += Math.sin(this.time * 0.02 + i * 1.5) * 0.003;
+    }
+
+    // ─── Horizon haze ─────────────────────────────────────────
+    // Haze is strongest during day (atmospheric scattering), faint at night
+    let hazeOpacity = 0.08 * daylight;
+
+    // Evening: warmer haze
+    if (eveningFactor > 0) {
+      this.hazeMaterial.color.setHex(0xc8dce8).lerp(
+        new THREE.Color(0xf0c888), eveningFactor * 0.4
+      );
+      hazeOpacity += eveningFactor * 0.04;
+    } else if (nightFactor > 0.5) {
+      this.hazeMaterial.color.setHex(0x1a2030);
+      hazeOpacity = 0.03 * (1 - nightFactor * 0.5);
+    } else {
+      this.hazeMaterial.color.setHex(0xc8dce8);
+    }
+
+    // Weather: fog increases haze dramatically
+    if (weather) {
+      if (weather.fogFactor > 0.1) {
+        hazeOpacity += weather.fogFactor * 0.12;
+        this.hazeMaterial.color.lerp(new THREE.Color(0xb0b8c0), weather.fogFactor * 0.5);
+      }
+      if (weather.rainIntensity > 0.1) {
+        hazeOpacity += weather.rainIntensity * 0.04;
+      }
+      // Heat shimmer: warmer haze
+      if (weather.heatFactor > 0.1) {
+        this.hazeMaterial.color.lerp(new THREE.Color(0xf0d8a8), weather.heatFactor * 0.2);
+        hazeOpacity += weather.heatFactor * 0.03;
+      }
+    }
+
+    this.hazeMaterial.opacity = Math.min(0.22, hazeOpacity);
   }
 
   // ─── Token data ──────────────────────────────────────────
@@ -458,6 +980,7 @@ export class WorldRenderer3D {
     const deltaTime = Math.min(100, now - this.lastTime);
     this.lastTime = now;
     this.time += deltaTime / 1000;
+    this.frameCount++;
 
     this.update(deltaTime);
     this.doRender();
@@ -473,7 +996,14 @@ export class WorldRenderer3D {
     const lerpFactor = 1 - Math.pow(0.05, deltaTime / 1000);
     this.smoothDecay += (this.targetDecay - this.smoothDecay) * lerpFactor;
     this.smoothVolume += (this.targetVolume - this.smoothVolume) * lerpFactor;
-    this.smoothConstruction += (this.targetConstruction - this.smoothConstruction) * lerpFactor;
+
+    // Post-graduation: construction is permanently locked at 100%.
+    // Higher tiers always appear fully built — only decay affects them.
+    if (this.worldState.hasGraduated) {
+      this.smoothConstruction = 1;
+    } else {
+      this.smoothConstruction += (this.targetConstruction - this.smoothConstruction) * lerpFactor;
+    }
 
     this.renderState = {
       ...this.worldState,
@@ -482,7 +1012,10 @@ export class WorldRenderer3D {
       smoothConstruction: this.smoothConstruction,
       time: this.time,
       deltaTime,
-      celebrationProgress: getCelebrationProgress()
+      celebrationProgress: getCelebrationProgress(),
+      dayPhase: this.dayPhase,
+      nightFactor: 1 - this.getDaylightFactor(),
+      eveningFactor: this.getEveningFactor(),
     };
 
     // Weather (independent from token state)
@@ -495,21 +1028,35 @@ export class WorldRenderer3D {
     // Camera
     this.updateCamera(deltaTime);
 
-    // Scene elements
+    // Scene elements — always update (castle is focal point)
     this.castleBuilder.update(this.renderState);
     this.creatureBuilder.update(this.renderState);
-    this.environmentBuilder.update(this.renderState, weather);
     this.effectsManager.update(this.renderState, deltaTime);
 
-    // Enhanced systems
-    this.actorManager.update(this.renderState);
+    // Environment — trees/hills throttled by quality level
+    const qc = this.qualityConfig;
+    if (qualitySettings.shouldUpdateThisFrame(this.frameCount, qc.hillUpdateInterval)) {
+      this.environmentBuilder.update(this.renderState, weather);
+    }
+
+    // Enhanced systems — throttle non-critical actors
+    if (qualitySettings.shouldUpdateThisFrame(this.frameCount, qc.actorUpdateInterval)) {
+      this.actorManager.update(this.renderState);
+    }
     this.eventSystem.update(this.renderState, deltaTime);
     this.physicsMotion.update(this.renderState, weather);
     this.memoryRenderer.update(this.memoryState.getMemory());
-    this.outerWorldBuilder.update(this.renderState, weather);
+    if (qualitySettings.shouldUpdateThisFrame(this.frameCount, qc.actorUpdateInterval)) {
+      this.outerWorldBuilder.update(this.renderState, weather);
+    }
 
-    // Weather effects (particles, lightning, ground cover)
-    this.weatherEffects.update(weather, deltaTime);
+    // Weather effects — throttled on lower quality
+    if (qualitySettings.shouldUpdateThisFrame(this.frameCount, qc.weatherEffectsInterval)) {
+      this.weatherEffects.update(weather, deltaTime);
+    }
+
+    // Sky dome + clouds + haze (visual sky gradient, syncs with time/weather)
+    this.updateSky(weather);
 
     // Atmosphere (state-driven + weather overlay on top of day/night)
     this.updateAtmosphere(deltaTime, weather);
@@ -575,23 +1122,31 @@ export class WorldRenderer3D {
 
     const lerpSpeed = deltaTime / 1000 * 1.5;
     const daylight = this.getDaylightFactor();
+    const nightFactor = 1 - daylight;
+    const eveningFactor = this.getEveningFactor();
 
-    // Base sky from day/night
+    // Base sky from day/night — richer palette
     const daySky = new THREE.Color(0x87ceeb);
-    const nightSky = new THREE.Color(0x0a0e1a);
+    const nightSky = new THREE.Color(0x182440);   // brighter navy, readable not black
     const sunriseSky = new THREE.Color(0xffa070);
+    const eveningSky = new THREE.Color(0xD08050);  // warm amber sky during golden hour
 
     let baseSky: THREE.Color;
-    if (daylight < 0.15) {
+    if (daylight < 0.10) {
       baseSky = nightSky;
-    } else if (daylight < 0.35) {
-      const t = (daylight - 0.15) / 0.2;
+    } else if (daylight < 0.25) {
+      const t = (daylight - 0.10) / 0.15;
       baseSky = nightSky.clone().lerp(sunriseSky, t);
-    } else if (daylight < 0.5) {
-      const t = (daylight - 0.35) / 0.15;
+    } else if (daylight < 0.45) {
+      const t = (daylight - 0.25) / 0.20;
       baseSky = sunriseSky.clone().lerp(daySky, t);
     } else {
       baseSky = daySky;
+    }
+
+    // Evening golden warmth overlay
+    if (eveningFactor > 0) {
+      baseSky.lerp(eveningSky, eveningFactor * 0.25);
     }
 
     // State-driven overrides (blend on top of day/night)
@@ -621,24 +1176,90 @@ export class WorldRenderer3D {
       this.targetAmbientIntensity = 0.3;
     } else if (this.renderState.phase === 'thriving' && this.renderState.priceChange24h > 10) {
       this.targetFogColor.copy(baseSky);
-      this.targetFogNear = 40;
-      this.targetFogFar = 120;
-      this.targetSunIntensity = 1.4;
-      this.targetAmbientIntensity = 0.5;
+      this.targetFogNear = 50;
+      this.targetFogFar = 140;
+      this.targetSunIntensity = 2.2;
+      this.targetAmbientIntensity = 0.65;
     } else {
       this.targetFogColor.copy(baseSky);
-      this.targetFogNear = 40 + daylight * 20;
-      this.targetFogFar = 80 + daylight * 70;
-      this.targetSunIntensity = 0.25 + daylight * 1.35;
-      this.targetAmbientIntensity = 0.25 + daylight * 0.45;
+      // Clear day: fog pushed well back for open, airy feel
+      // Night: fog still pushed back enough to see terrain and hills clearly.
+      // Night floor: near=50, far=100 (not too close — hills should be visible)
+      // Day peak: near=80, far=190 (open, airy)
+      this.targetFogNear = 50 + daylight * 30;
+      this.targetFogFar = 100 + daylight * 90;
+      // Match updateDayNightCycle values
+      this.targetSunIntensity = 0.45 + daylight * 1.55;
+      this.targetAmbientIntensity = 0.40 + daylight * 0.50;
+    }
+
+    // ── Night atmosphere enhancement — atmospheric light scattering ──
+    // Moonlight scatters through the atmosphere, creating a soft blue haze
+    // that lifts distant terrain out of darkness. This is the key to making
+    // nights feel deep but not invisible. The fog color should be bright
+    // enough that hills fade into visible blue haze, not black void.
+    if (nightFactor > 0.3) {
+      const nightStrength = (nightFactor - 0.3) / 0.7; // 0–1 in night range
+      // Moonlit atmospheric haze: bright cool blue (NOT dark navy)
+      // This is what makes distant hills readable — they fade into blue, not black
+      this.targetFogColor.lerp(new THREE.Color(0x2a3a58), nightStrength * 0.40);
+      // Push fog back generously — night terrain should be VISIBLE
+      this.targetFogNear += nightStrength * 15;
+      this.targetFogFar += nightStrength * 35;
+      // Strong ambient boost: sky illumination fills shadows with cool light
+      this.targetAmbientIntensity += nightStrength * 0.18;
+      // Slight exposure lift for atmospheric scattering brightness
+      this.targetExposure += nightStrength * 0.05;
+    }
+
+    // ── Evening golden hour enhancement ─────────────────────────
+    // Warm cinematic glow during sunset / sunrise
+    if (eveningFactor > 0) {
+      this.targetFogColor.lerp(new THREE.Color(0xE8C088), eveningFactor * 0.15);
+      this.targetSunIntensity *= 1 + eveningFactor * 0.15; // slightly brighter warm sun
+      this.targetAmbientIntensity *= 1 + eveningFactor * 0.10;
+      this.targetExposure += eveningFactor * 0.06;
+    }
+
+    // Legendary atmosphere: warm, luminous, premium feel — never muted
+    if (this.renderState.isLegendary && this.renderState.hasGraduated) {
+      // Slight golden warmth to the fog for a fairy-tale glow
+      this.targetFogColor.lerp(new THREE.Color(0xf8f0e0), 0.08);
+      // Push fog back for cleaner silhouettes against the sky
+      this.targetFogNear += 8;
+      this.targetFogFar += 25;
+      // Slightly brighter sun — legendary castles catch more light
+      this.targetSunIntensity *= 1.08;
+      this.targetAmbientIntensity *= 1.06;
+      // Warmer exposure
+      this.targetExposure += 0.04;
+
+      // ── Legendary night: MORE beautiful at night than day ──────
+      // At night, legendary castles glow from within. The sky darkens
+      // but the castle becomes the light source — a beacon in the dark.
+      if (nightFactor > 0.3) {
+        const legendaryNight = (nightFactor - 0.3) / 0.7;
+        // Push fog even further back — legendary silhouette is always clear
+        this.targetFogNear += legendaryNight * 8;
+        this.targetFogFar += legendaryNight * 20;
+        // Warm golden night fog tint — the castle's glow colors the air
+        this.targetFogColor.lerp(new THREE.Color(0x1A1828), legendaryNight * 0.15);
+        this.targetFogColor.lerp(new THREE.Color(0x2A2040), legendaryNight * 0.08);
+        // Boost ambient for readability — legendary never goes truly dark
+        this.targetAmbientIntensity += legendaryNight * 0.12;
+        // Warmer exposure at night — the castle's inner light compensates
+        this.targetExposure += legendaryNight * 0.10;
+      }
     }
 
     // Decay darkens fog
     const decayFog = this.renderState.smoothDecay * 0.5;
-    this.targetFogNear -= decayFog * 10;
-    this.targetFogFar -= decayFog * 30;
-    this.targetSunIntensity *= (1 - this.renderState.smoothDecay * 0.4);
-    this.targetAmbientIntensity *= (1 - this.renderState.smoothDecay * 0.3);
+    // Legendary castles resist atmospheric decay — fog only half as aggressive
+    const fogDecayMult = this.renderState.isLegendary ? 0.5 : 1.0;
+    this.targetFogNear -= decayFog * 10 * fogDecayMult;
+    this.targetFogFar -= decayFog * 30 * fogDecayMult;
+    this.targetSunIntensity *= (1 - this.renderState.smoothDecay * (this.renderState.isLegendary ? 0.20 : 0.4));
+    this.targetAmbientIntensity *= (1 - this.renderState.smoothDecay * (this.renderState.isLegendary ? 0.15 : 0.3));
 
     // ─── Weather layer (additive modifier, never overpowers token state) ───
     if (weather) {
@@ -675,6 +1296,63 @@ export class WorldRenderer3D {
       }
     }
 
+    // ── Castle-focused light modifiers (state + weather) ─────────
+    // The castle key light and rim light are set in updateDayNightCycle()
+    // based on time-of-day. Here we apply additional modifiers for
+    // token state (cursed, zombie, legendary, decay) and weather.
+    if (this.renderState) {
+      // State modifiers: cursed/zombie dims castle lights
+      if (this.renderState.isCursed) {
+        this.castleKeyLight.intensity *= 0.3;
+        this.castleRimLight.intensity *= 0.4;
+        this.castleRimLight.color.setHex(0x6a3a6a); // sickly purple rim
+      } else if (this.renderState.isZombie) {
+        this.castleKeyLight.intensity *= 0.4;
+        this.castleRimLight.intensity *= 0.5;
+        this.castleRimLight.color.lerp(new THREE.Color(0x4a6a4a), 0.5);
+      }
+
+      // Legendary: castle gets stronger key and rim — the hero glow
+      if (this.renderState.isLegendary && this.renderState.hasGraduated) {
+        this.castleKeyLight.intensity *= 1.20;
+        this.castleRimLight.intensity *= 1.15;
+        // Night legendary: key light gains warm golden cast
+        if (nightFactor > 0.3) {
+          const legendaryNight = (nightFactor - 0.3) / 0.7;
+          this.castleKeyLight.color.lerp(new THREE.Color(0xffe0a0), legendaryNight * 0.3);
+          this.castleKeyLight.intensity += legendaryNight * 0.15;
+          this.castleRimLight.intensity += legendaryNight * 0.10;
+        }
+      }
+
+      // Thriving + bullish: castle even more prominent
+      if (this.renderState.phase === 'thriving' && this.renderState.priceChange24h > 10) {
+        this.castleKeyLight.intensity *= 1.10;
+      }
+
+      // Decay dims castle lights (but less than it dims the sun)
+      const decayDim = 1 - this.renderState.smoothDecay * (this.renderState.isLegendary ? 0.15 : 0.30);
+      this.castleKeyLight.intensity *= decayDim;
+      this.castleRimLight.intensity *= decayDim;
+    }
+
+    // Weather modifiers on castle lights
+    if (weather) {
+      // Rain/storm dims key light, but keeps rim for silhouette
+      const rainDim = 1 - weather.rainIntensity * 0.25 - weather.stormFactor * 0.20;
+      this.castleKeyLight.intensity *= rainDim;
+      this.castleRimLight.intensity *= (1 - weather.rainIntensity * 0.10); // rim persists
+
+      // Clouds dim key slightly
+      this.castleKeyLight.intensity *= (1 - weather.cloudiness * 0.12);
+
+      // Fog: key light still visible (castle is the beacon in fog)
+      // but rim dims (edges lost in haze)
+      if (weather.fogFactor > 0.1) {
+        this.castleRimLight.intensity *= (1 - weather.fogFactor * 0.40);
+      }
+    }
+
     // Smooth lerp
     this.currentFogColor.lerp(this.targetFogColor, lerpSpeed);
     this.currentFogNear += (this.targetFogNear - this.currentFogNear) * lerpSpeed;
@@ -683,13 +1361,11 @@ export class WorldRenderer3D {
     this.currentAmbientIntensity += (this.targetAmbientIntensity - this.currentAmbientIntensity) * lerpSpeed;
     this.currentExposure += (this.targetExposure - this.currentExposure) * lerpSpeed;
 
-    // Apply
-    this.scene.fog = new THREE.Fog(
-      this.currentFogColor,
-      Math.max(5, this.currentFogNear),
-      Math.max(20, this.currentFogFar)
-    );
-    this.scene.background = this.currentFogColor.clone();
+    // Apply — mutate existing fog (no allocation per frame)
+    this.fog.color.copy(this.currentFogColor);
+    this.fog.near = Math.max(5, this.currentFogNear);
+    this.fog.far = Math.max(20, this.currentFogFar);
+    // Sky dome provides the background — no flat scene.background needed
     this.renderer.toneMappingExposure = this.currentExposure;
   }
 
@@ -715,6 +1391,25 @@ export class WorldRenderer3D {
 
   getWeatherState(): WeatherRenderState {
     return this.weatherState.getRenderState();
+  }
+
+  getTimeInfo(): TimeInfo {
+    return computeTimeInfo();
+  }
+
+  getQualityLevel(): string {
+    return qualitySettings.getLevel();
+  }
+
+  setQualityLevel(level: 'low' | 'medium' | 'high'): void {
+    qualitySettings.setLevel(level);
+    this.qualityConfig = qualitySettings.getConfig();
+    // Apply renderer changes that require immediate effect
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.qualityConfig.pixelRatio));
+    this.renderer.shadowMap.enabled = this.qualityConfig.shadowsEnabled;
+    if (this.sunLight) {
+      this.sunLight.castShadow = this.qualityConfig.shadowsEnabled;
+    }
   }
 
   burst(screenX: number, screenY: number, count: number = 20): void {
@@ -746,6 +1441,37 @@ export class WorldRenderer3D {
     canvas.removeEventListener('touchstart', this.onTouchStart);
     window.removeEventListener('touchmove', this.onTouchMove);
     window.removeEventListener('touchend', this.onTouchEnd);
+
+    // Dispose castle-focused lights
+    if (this.castleKeyLight) {
+      this.scene.remove(this.castleKeyLight);
+      this.scene.remove(this.castleKeyLight.target);
+      this.castleKeyLight.dispose();
+    }
+    if (this.castleRimLight) {
+      this.scene.remove(this.castleRimLight);
+      this.scene.remove(this.castleRimLight.target);
+      this.castleRimLight.dispose();
+    }
+
+    // Dispose sky dome, clouds, haze
+    if (this.skyDome) {
+      this.skyDome.geometry.dispose();
+      (this.skyDome.material as THREE.Material).dispose();
+      this.scene.remove(this.skyDome);
+    }
+    if (this.cloudGroup) {
+      for (const cloud of this.cloudMeshes) {
+        cloud.geometry.dispose();
+        (cloud.material as THREE.Material).dispose();
+      }
+      this.scene.remove(this.cloudGroup);
+    }
+    if (this.hazeMesh) {
+      this.hazeMesh.geometry.dispose();
+      this.hazeMaterial.dispose();
+      this.scene.remove(this.hazeMesh);
+    }
 
     // Dispose builders
     this.castleBuilder.dispose();

@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import type { RenderState } from '$lib/types';
 import type { WeatherRenderState } from '$lib/state/WeatherState';
+import { qualitySettings } from './QualitySettings';
 
 export class EnvironmentBuilder {
   private scene: THREE.Scene;
@@ -26,6 +27,16 @@ export class EnvironmentBuilder {
   // Trees
   private trees: THREE.Group[] = [];
 
+  // Shared tree geometries (reused across all trees — saves ~90 geometry allocations)
+  private trunkGeometry!: THREE.CylinderGeometry;
+  private foliageCone1Geometry!: THREE.ConeGeometry;
+  private foliageCone2Geometry!: THREE.ConeGeometry;
+  private foliageCone3Geometry!: THREE.ConeGeometry;
+
+  // Shared foliage materials — pool of ~6 green variants (instead of unique per-tree)
+  private foliageMaterials: THREE.MeshStandardMaterial[] = [];
+  private trunkMaterials: THREE.MeshStandardMaterial[] = [];
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
 
@@ -34,10 +45,45 @@ export class EnvironmentBuilder {
     this.scene.add(this.environmentGroup);
 
     this.groundMaterial = new THREE.MeshStandardMaterial({
-      color: 0x4a7c45,
-      roughness: 0.9,
-      metalness: 0.0
+      color: 0x5a9055,
+      roughness: 0.82,
+      metalness: 0.0,
+      vertexColors: true
     });
+
+    // ─── Shared tree geometries (allocated once) ──────────────
+    this.trunkGeometry = new THREE.CylinderGeometry(0.15, 0.25, 1.5, 6);
+    this.foliageCone1Geometry = new THREE.ConeGeometry(1.2, 1.5, 6);
+    this.foliageCone2Geometry = new THREE.ConeGeometry(0.9, 1.2, 6);
+    this.foliageCone3Geometry = new THREE.ConeGeometry(0.6, 1, 6);
+
+    // ─── Pre-built material pools ─────────────────────────────
+    // 6 foliage color variants × 3 lightness tiers = 18 materials
+    // (vs ~90 unique materials in the old system)
+    const foliageVariants = [
+      { h: 0.28, s: 0.50, l: 0.32 },
+      { h: 0.30, s: 0.55, l: 0.34 },
+      { h: 0.32, s: 0.48, l: 0.30 },
+      { h: 0.34, s: 0.58, l: 0.36 },
+      { h: 0.29, s: 0.52, l: 0.33 },
+      { h: 0.33, s: 0.45, l: 0.35 },
+    ];
+    for (const v of foliageVariants) {
+      for (const boost of [0, 0.03, 0.06]) {
+        this.foliageMaterials.push(new THREE.MeshStandardMaterial({
+          color: new THREE.Color().setHSL(v.h, v.s, Math.min(0.42, v.l + boost)),
+          roughness: 0.70,
+        }));
+      }
+    }
+    // 3 trunk color variants
+    for (let i = 0; i < 3; i++) {
+      const hue = 0.06 + i * 0.01;
+      this.trunkMaterials.push(new THREE.MeshStandardMaterial({
+        color: new THREE.Color().setHSL(hue, 0.35, 0.22 + i * 0.03),
+        roughness: 0.82,
+      }));
+    }
   }
 
   /**
@@ -67,6 +113,50 @@ export class EnvironmentBuilder {
 
     groundGeom.computeVertexNormals();
 
+    // Vertex colors: subtle green variation across the terrain.
+    // Center = slightly brighter (sunlit clearing), edges = richer/darker.
+    // Adds organic life to what would otherwise be a flat-colored plane.
+    const vertexCount = positions.count;
+    const colors = new Float32Array(vertexCount * 3);
+    const baseGreen = new THREE.Color(0x5a9055);
+    const brightPatch = new THREE.Color(0x6ca868); // sunlit patch
+    const richPatch = new THREE.Color(0x4d8248);   // lush shadow
+    const dryPatch = new THREE.Color(0x7a9450);    // slight yellow-green
+
+    for (let i = 0; i < vertexCount; i++) {
+      const x = positions.getX(i);
+      const z = positions.getY(i);
+      const dist = Math.sqrt(x * x + z * z);
+
+      // Start from base
+      const c = baseGreen.clone();
+
+      // Sunlit clearing near center — brighter, warmer green
+      if (dist < 18) {
+        const centerFactor = 1 - dist / 18;
+        c.lerp(brightPatch, centerFactor * 0.35);
+      }
+
+      // Richer lush green at mid-distance (where trees grow)
+      if (dist > 10 && dist < 30) {
+        const midFactor = 1 - Math.abs(dist - 20) / 10;
+        c.lerp(richPatch, midFactor * 0.2);
+      }
+
+      // Slight noise-like variation using cheap sine hashing
+      const noise = Math.sin(x * 0.8 + z * 1.1) * Math.cos(x * 0.5 - z * 0.7);
+      if (noise > 0.3) {
+        c.lerp(brightPatch, (noise - 0.3) * 0.25);
+      } else if (noise < -0.3) {
+        c.lerp(dryPatch, (-noise - 0.3) * 0.2);
+      }
+
+      colors[i * 3] = c.r;
+      colors[i * 3 + 1] = c.g;
+      colors[i * 3 + 2] = c.b;
+    }
+    groundGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
     this.groundMesh = new THREE.Mesh(groundGeom, this.groundMaterial);
     this.groundMesh.rotation.x = -Math.PI / 2;
     this.groundMesh.receiveShadow = true;
@@ -91,12 +181,32 @@ export class EnvironmentBuilder {
       { x: 0, z: -40, radius: 20, height: 10 }
     ];
 
-    const hillMaterial = new THREE.MeshStandardMaterial({
-      color: 0x5a8a55,
-      roughness: 0.9
-    });
+    // Each hill gets a unique tint. Distant hills shift slightly blue-green
+    // (aerial perspective), closer hills are warmer green.
+    const baseHillColor = new THREE.Color(0x6a9a65);
+    const distantTint = new THREE.Color(0x6a8a7a); // blue-green for distance
 
     for (const pos of hillPositions) {
+      const dist = Math.sqrt(pos.x * pos.x + pos.z * pos.z);
+      const distanceFactor = Math.min(1, dist / 50); // 0 near, 1 far
+
+      const hillColor = baseHillColor.clone();
+      hillColor.lerp(distantTint, distanceFactor * 0.3);
+      // Per-hill noise variation
+      const noise = Math.sin(pos.x * 0.3 + pos.z * 0.2) * 0.5 + 0.5;
+      const hsl = { h: 0, s: 0, l: 0 };
+      hillColor.getHSL(hsl);
+      hillColor.setHSL(
+        hsl.h + (noise - 0.5) * 0.02, // slight hue shift
+        hsl.s + (noise - 0.5) * 0.06, // saturation variation
+        hsl.l + (noise - 0.5) * 0.04  // brightness variation
+      );
+
+      const hillMaterial = new THREE.MeshStandardMaterial({
+        color: hillColor,
+        roughness: 0.82 + distanceFactor * 0.06 // distant hills slightly rougher
+      });
+
       const hillGeom = new THREE.SphereGeometry(pos.radius, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
       const hill = new THREE.Mesh(hillGeom, hillMaterial);
       hill.position.set(pos.x, 0, pos.z);
@@ -108,11 +218,13 @@ export class EnvironmentBuilder {
   }
 
   /**
-   * Add trees around the castle
+   * Add trees around the castle.
+   * OPTIMIZED: uses shared geometries and material pool.
+   * Tree count scaled by quality setting.
    */
   private addTrees(): void {
-    const treePositions = [
-      // Inner ring
+    const allTreePositions = [
+      // Inner ring (always rendered, even on LOW)
       { x: -12, z: 8 },
       { x: -14, z: -5 },
       { x: 13, z: 6 },
@@ -121,7 +233,7 @@ export class EnvironmentBuilder {
       { x: 10, z: -14 },
       { x: -18, z: 0 },
       { x: 18, z: 2 },
-      // Outer ring - more trees for a richer landscape
+      // Outer ring (MEDIUM+)
       { x: -22, z: 12 },
       { x: -25, z: -3 },
       { x: 22, z: 10 },
@@ -136,8 +248,8 @@ export class EnvironmentBuilder {
       { x: -16, z: 18 },
       { x: 16, z: 16 },
       { x: -6, z: -22 },
+      // Scattered far trees (HIGH only)
       { x: 6, z: -20 },
-      // Scattered far trees
       { x: -30, z: -10 },
       { x: 32, z: 12 },
       { x: -24, z: 20 },
@@ -146,6 +258,10 @@ export class EnvironmentBuilder {
       { x: -34, z: 4 },
       { x: 34, z: 8 }
     ];
+
+    // Quality-aware tree count
+    const maxTrees = qualitySettings.getConfig().treeCount;
+    const treePositions = allTreePositions.slice(0, maxTrees);
 
     for (const pos of treePositions) {
       const tree = this.createTree();
@@ -158,47 +274,46 @@ export class EnvironmentBuilder {
   }
 
   /**
-   * Create a simple low-poly tree
+   * Create a simple low-poly tree using shared geometries and material pool.
+   * OPTIMIZED: All trees share 4 geometry instances and pick from a pool
+   * of ~18 pre-built materials. This reduces geometry allocations from ~120
+   * to 4, and material allocations from ~90 to ~21.
+   *
+   * Trees still look varied because each picks a random material variant
+   * and each cone layer uses a different lightness tier.
    */
   private createTree(): THREE.Group {
     const tree = new THREE.Group();
 
-    // Trunk
-    const trunkGeom = new THREE.CylinderGeometry(0.15, 0.25, 1.5, 6);
-    const trunkMat = new THREE.MeshStandardMaterial({
-      color: 0x4a3520,
-      roughness: 0.9
-    });
-    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    // Pick random trunk material from pool
+    const trunkMat = this.trunkMaterials[Math.floor(Math.random() * this.trunkMaterials.length)];
+    const trunk = new THREE.Mesh(this.trunkGeometry, trunkMat);
     trunk.position.y = 0.75;
     trunk.castShadow = true;
     tree.add(trunk);
 
-    // Foliage (stacked cones)
-    const foliageMat = new THREE.MeshStandardMaterial({
-      color: 0x2d5a2d,
-      roughness: 0.8
-    });
+    // Pick random foliage color variant (each variant has 3 lightness tiers)
+    const variantBase = Math.floor(Math.random() * 6) * 3; // 6 variants
 
     const cone1 = new THREE.Mesh(
-      new THREE.ConeGeometry(1.2, 1.5, 6),
-      foliageMat
+      this.foliageCone1Geometry,
+      this.foliageMaterials[variantBase]     // base layer, darkest
     );
     cone1.position.y = 2;
     cone1.castShadow = true;
     tree.add(cone1);
 
     const cone2 = new THREE.Mesh(
-      new THREE.ConeGeometry(0.9, 1.2, 6),
-      foliageMat
+      this.foliageCone2Geometry,
+      this.foliageMaterials[variantBase + 1]  // middle — slightly brighter
     );
     cone2.position.y = 2.8;
     cone2.castShadow = true;
     tree.add(cone2);
 
     const cone3 = new THREE.Mesh(
-      new THREE.ConeGeometry(0.6, 1, 6),
-      foliageMat
+      this.foliageCone3Geometry,
+      this.foliageMaterials[variantBase + 2]  // top — brightest
     );
     cone3.position.y = 3.4;
     cone3.castShadow = true;
@@ -216,13 +331,17 @@ export class EnvironmentBuilder {
 
     // Update tree visibility/color
     this.updateTrees(state, weather);
+
+    // Update hill atmospheric perspective
+    this.updateHills(state, weather);
   }
 
   /**
-   * Update ground color (token state + weather modifiers)
+   * Update ground color (token state + weather + daylight modifiers)
    */
   private updateGroundColor(state: RenderState, weather?: WeatherRenderState): void {
-    let groundColor = new THREE.Color(0x4a7c45);
+    let groundColor = new THREE.Color(0x5a9055);
+    const daylightFactor = 1 - state.nightFactor; // 0 at night, 1 at noon
 
     if (state.isCursed) {
       groundColor = new THREE.Color(0x3a3a4a);
@@ -232,14 +351,33 @@ export class EnvironmentBuilder {
       groundColor.lerp(new THREE.Color(0x5a5a4a), (state.smoothDecay - 0.5) * 2);
     }
 
+    // ── Daylight boost: sunlit grass is brighter, greener, livelier ───
+    // This is the key visual improvement — clear day grass looks alive.
+    if (daylightFactor > 0.4 && !state.isCursed && !state.isZombie) {
+      const sunFactor = (daylightFactor - 0.4) / 0.6; // 0–1 in daytime range
+      // Bright sunlit green — grass catches warm sunlight
+      groundColor.lerp(new THREE.Color(0x68a862), sunFactor * 0.25);
+      // Roughness drops in sunlight — grass glistens slightly
+      this.groundMaterial.roughness = 0.82 - sunFactor * 0.10; // 0.82 → 0.72
+    } else {
+      this.groundMaterial.roughness = 0.82;
+    }
+
     // Weather modifiers (subtle, never overpowers token state)
     if (weather) {
       // Rain → slightly darker, wetter-looking ground
       if (weather.rainIntensity > 0.1) {
-        groundColor.lerp(new THREE.Color(0x3a5a35), weather.rainIntensity * 0.25);
-        this.groundMaterial.roughness = 0.9 - weather.rainIntensity * 0.15; // wetter = slightly shinier
-      } else {
-        this.groundMaterial.roughness = 0.9;
+        groundColor.lerp(new THREE.Color(0x3a6a38), weather.rainIntensity * 0.25);
+        this.groundMaterial.roughness = Math.min(this.groundMaterial.roughness,
+          0.78 - weather.rainIntensity * 0.15); // wetter = shinier
+      }
+
+      // Clear/sunny: additional brightness when no rain/cloud/fog
+      const clearness = 1 - weather.rainIntensity - weather.cloudiness * 0.5 - weather.fogFactor;
+      if (clearness > 0.5 && daylightFactor > 0.5) {
+        const sunnyBoost = (clearness - 0.5) * 2 * ((daylightFactor - 0.5) * 2);
+        groundColor.lerp(new THREE.Color(0x70b068), sunnyBoost * 0.15);
+        this.groundMaterial.roughness -= sunnyBoost * 0.05;
       }
 
       // Heat → dry, yellowish ground
@@ -253,19 +391,81 @@ export class EnvironmentBuilder {
       }
     }
 
+    // ── Night sky illumination on ground ──────────────────────────
+    // At night, moonlight and sky glow lift the terrain with a cool blue tint.
+    // This prevents the ground from becoming a dark void — it stays readable.
+    if (state.nightFactor > 0.3 && !state.isCursed && !state.isZombie) {
+      const nightLift = (state.nightFactor - 0.3) / 0.7; // 0–1 in night range
+      // Blend toward moonlit blue-green (lighter than natural nighttime decay)
+      groundColor.lerp(new THREE.Color(0x3a5050), nightLift * 0.20);
+      // Slightly increase emissive-like effect via reduced roughness
+      // (moonlit wet grass catches more specular highlights from moonlight)
+      this.groundMaterial.roughness -= nightLift * 0.05;
+    }
+
+    // Clamp roughness to sane range — floor of 0.65 ensures terrain
+    // never competes with castle's polished materials (which go to 0.32–0.48)
+    this.groundMaterial.roughness = Math.max(0.65, Math.min(0.85, this.groundMaterial.roughness));
+
     this.groundMaterial.color.lerp(groundColor, 0.05);
   }
 
   /**
-   * Update trees based on state + weather
+   * Update trees based on state, weather, and daylight.
+   * OPTIMIZED: Since foliage materials are shared from a pool, we update
+   * the pool materials once (affects all trees using them) instead of
+   * traversing every mesh in every tree each frame.
+   * Wind sway is still per-tree (cheap — just rotation).
    */
   private updateTrees(state: RenderState, weather?: WeatherRenderState): void {
     const deadTrees = state.isZombie || state.isCursed || state.smoothDecay > 0.7;
+    const daylightFactor = 1 - state.nightFactor;
 
+    // ─── Update shared foliage materials (once for all trees) ────────
+    for (const mat of this.foliageMaterials) {
+      if (deadTrees) {
+        mat.color.lerp(new THREE.Color(0x4a3a2a), 0.02);
+        mat.roughness += (0.90 - mat.roughness) * 0.02;
+      } else {
+        // Sunlight response
+        if (daylightFactor > 0.4) {
+          const sunStrength = (daylightFactor - 0.4) / 0.6;
+          const hsl = { h: 0, s: 0, l: 0 };
+          mat.color.getHSL(hsl);
+          const sunlitColor = new THREE.Color().setHSL(
+            hsl.h,
+            Math.min(0.65, hsl.s + sunStrength * 0.08),
+            Math.min(0.42, hsl.l + sunStrength * 0.06)
+          );
+          mat.color.lerp(sunlitColor, 0.02);
+          mat.roughness += (0.65 - mat.roughness) * 0.02 * sunStrength;
+        } else if (state.nightFactor > 0.5) {
+          const nightDim = (state.nightFactor - 0.5) / 0.5;
+          // Moonlight tint: trees go blue-green under moonlight (not darker)
+          mat.color.lerp(new THREE.Color(0x3a5850), nightDim * 0.015);
+          mat.roughness += (0.80 - mat.roughness) * 0.02;
+        }
+
+        // Weather tints
+        if (weather) {
+          if (weather.coldFactor > 0.3) {
+            mat.color.lerp(new THREE.Color(0x5a7a7a), weather.coldFactor * 0.005);
+          }
+          if (weather.heatFactor > 0.2) {
+            mat.color.lerp(new THREE.Color(0x5a6a2a), weather.heatFactor * 0.005);
+          }
+          if (weather.rainIntensity > 0.1) {
+            mat.roughness += (0.55 - mat.roughness) * weather.rainIntensity * 0.02;
+          }
+        }
+      }
+      mat.roughness = Math.max(0.58, Math.min(0.90, mat.roughness));
+    }
+
+    // ─── Per-tree wind sway (cheap — just rotation) ─────────────
     for (let i = 0; i < this.trees.length; i++) {
       const tree = this.trees[i];
 
-      // Wind sway on tree trunk
       if (weather && weather.windFactor > 0.05) {
         const windSway = Math.sin(state.time * 1.5 + i * 0.7) * weather.windFactor * 0.04;
         tree.rotation.z = windSway;
@@ -274,31 +474,87 @@ export class EnvironmentBuilder {
         tree.rotation.z *= 0.95;
         tree.rotation.x *= 0.95;
       }
+    }
+  }
 
-      tree.traverse((child) => {
-        if (child instanceof THREE.Mesh &&
-          child.material instanceof THREE.MeshStandardMaterial) {
-          if (child.geometry instanceof THREE.ConeGeometry) {
-            // Foliage color
-            let targetColor: THREE.Color;
-            if (deadTrees) {
-              targetColor = new THREE.Color(0x4a3a2a);
-            } else {
-              targetColor = new THREE.Color(0x2d5a2d);
-              // Weather tints
-              if (weather) {
-                if (weather.coldFactor > 0.3) {
-                  targetColor.lerp(new THREE.Color(0x5a7a7a), weather.coldFactor * 0.3);
-                }
-                if (weather.heatFactor > 0.2) {
-                  targetColor.lerp(new THREE.Color(0x5a6a2a), weather.heatFactor * 0.2);
-                }
-              }
-            }
-            child.material.color.lerp(targetColor, 0.02);
-          }
-        }
-      });
+  /**
+   * Update hills with atmospheric perspective.
+   * Distant hills fade toward the sky/haze color — this creates depth
+   * and makes the world feel expansive rather than boxed-in.
+   */
+  private updateHills(state: RenderState, weather?: WeatherRenderState): void {
+    const daylightFactor = 1 - state.nightFactor;
+
+    // Atmospheric perspective color shifts with time of day
+    // At night, distant hills should fade toward moonlit blue-grey (NOT dark/black).
+    // This mimics atmospheric light scattering from moonlight and sky glow.
+    let atmosColor: THREE.Color;
+    if (daylightFactor > 0.5) {
+      // Daytime: hills fade toward pale sky-blue (aerial perspective)
+      atmosColor = new THREE.Color(0xa8c8d8);
+    } else if (daylightFactor > 0.15) {
+      // Dawn/dusk: warm amber atmospheric color
+      const t = (daylightFactor - 0.15) / 0.35;
+      atmosColor = new THREE.Color(0x506878).lerp(new THREE.Color(0xa8c8d8), t);
+    } else {
+      // Night: cool blue-grey atmospheric haze (moonlit scattering)
+      // Bright enough that distant hills read as silhouettes, not black blobs
+      atmosColor = new THREE.Color(0x384858);
+    }
+
+    // Weather modifiers
+    if (weather) {
+      if (weather.fogFactor > 0.1) {
+        atmosColor.lerp(new THREE.Color(0xb0b8c0), weather.fogFactor * 0.4);
+      }
+      if (weather.rainIntensity > 0.1) {
+        atmosColor.lerp(new THREE.Color(0x6a7080), weather.rainIntensity * 0.3);
+      }
+    }
+
+    const hillPositions = [
+      { x: -30, z: -25 },
+      { x: 25, z: -30 },
+      { x: -20, z: -35 },
+      { x: 35, z: -20 },
+      { x: 0, z: -40 }
+    ];
+
+    for (let i = 0; i < this.hills.length; i++) {
+      const hill = this.hills[i];
+      const mat = hill.material as THREE.MeshStandardMaterial;
+      const pos = hillPositions[i];
+      if (!pos) continue;
+
+      const dist = Math.sqrt(pos.x * pos.x + pos.z * pos.z);
+      const distanceFactor = Math.min(1, dist / 50);
+
+      // Atmospheric perspective: distant hills blend toward atmosphere color
+      // At night, INCREASE scattering — moonlit haze makes distant hills
+      // fade to soft blue-grey instead of becoming dark silhouettes.
+      // Day: 0.25 strength (clear aerial perspective)
+      // Night: 0.35 strength (stronger blue haze lifts dark hills)
+      const atmosStrength = distanceFactor * (0.25 + state.nightFactor * 0.10);
+
+      // Base hill color (restored from initial state)
+      const baseHillColor = new THREE.Color(0x6a9a65);
+      const distantTint = new THREE.Color(0x6a8a7a);
+      const baseColor = baseHillColor.clone().lerp(distantTint, distanceFactor * 0.3);
+
+      // Apply atmospheric perspective
+      const targetColor = baseColor.clone().lerp(atmosColor, atmosStrength);
+
+      // Night moonlight lift: hills gain cool blue tint from sky illumination.
+      // This prevents distant hills from becoming black blobs — they should
+      // read as deep blue-grey silhouettes against the night sky.
+      if (state.nightFactor > 0.3) {
+        const nightLift = (state.nightFactor - 0.3) / 0.7;
+        // Blend toward a moonlit blue-grey (brighter than the hill base at night)
+        targetColor.lerp(new THREE.Color(0x3a4a58), nightLift * 0.25);
+      }
+
+      // Smooth transition
+      mat.color.lerp(targetColor, 0.03);
     }
   }
 
@@ -318,16 +574,15 @@ export class EnvironmentBuilder {
       }
     }
 
-    for (const tree of this.trees) {
-      tree.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
-          if (child.material instanceof THREE.Material) {
-            child.material.dispose();
-          }
-        }
-      });
-    }
+    // Dispose shared tree geometries (shared, so dispose once)
+    this.trunkGeometry.dispose();
+    this.foliageCone1Geometry.dispose();
+    this.foliageCone2Geometry.dispose();
+    this.foliageCone3Geometry.dispose();
+
+    // Dispose pooled materials
+    for (const mat of this.foliageMaterials) mat.dispose();
+    for (const mat of this.trunkMaterials) mat.dispose();
 
     this.scene.remove(this.environmentGroup);
   }

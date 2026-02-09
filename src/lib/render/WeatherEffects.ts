@@ -2,27 +2,40 @@
  * WeatherEffects.ts
  *
  * Visual particle systems for weather:
- * - Rain streaks
- * - Snow flakes
- * - Heat haze (subtle screen-space distortion faked with particles)
+ * - Rain streaks (batched Points — 1 draw call)
+ * - Snow flakes (batched Points — 1 draw call)
+ * - Heat haze (batched Points — 1 draw call)
  * - Storm lightning flashes
  * - Fog thickening
+ *
+ * OPTIMIZED: All particles use THREE.Points with BufferGeometry.
+ * Rain/snow/haze share a single Points mesh each instead of
+ * hundreds of individual Mesh objects. This reduces draw calls
+ * from ~540 to ~3 for weather effects.
  */
 
 import * as THREE from 'three';
 import type { WeatherRenderState } from '$lib/state/WeatherState';
+import { qualitySettings } from './QualitySettings';
 
-interface RainDrop {
-  mesh: THREE.Mesh;
-  velocity: THREE.Vector3;
+interface RainParticle {
+  x: number; y: number; z: number;
+  vy: number;
   life: number;
 }
 
-interface SnowFlake {
-  mesh: THREE.Mesh;
-  velocity: THREE.Vector3;
+interface SnowParticle {
+  x: number; y: number; z: number;
+  vy: number;
   drift: number;
   phase: number;
+  life: number;
+  scale: number;
+}
+
+interface HazeParticle {
+  x: number; y: number; z: number;
+  rotationY: number;
   life: number;
 }
 
@@ -30,22 +43,24 @@ export class WeatherEffects {
   private scene: THREE.Scene;
   private group: THREE.Group;
 
-  // Rain
-  private rainDrops: RainDrop[] = [];
-  private rainMaterial: THREE.MeshBasicMaterial;
-  private rainGeometry: THREE.BoxGeometry;
-  private readonly MAX_RAIN = 300;
+  // Rain — single Points mesh
+  private rainParticles: RainParticle[] = [];
+  private rainPoints: THREE.Points;
+  private rainPositions: Float32Array;
+  private rainGeometry: THREE.BufferGeometry;
 
-  // Snow
-  private snowFlakes: SnowFlake[] = [];
-  private snowMaterial: THREE.MeshBasicMaterial;
-  private snowGeometry: THREE.SphereGeometry;
-  private readonly MAX_SNOW = 200;
+  // Snow — single Points mesh
+  private snowParticles: SnowParticle[] = [];
+  private snowPoints: THREE.Points;
+  private snowPositions: Float32Array;
+  private snowSizes: Float32Array;
+  private snowGeometry: THREE.BufferGeometry;
 
-  // Heat haze particles (shimmer effect)
-  private hazeParticles: THREE.Mesh[] = [];
-  private hazeMaterial: THREE.MeshBasicMaterial;
-  private readonly MAX_HAZE = 40;
+  // Heat haze — single Points mesh
+  private hazeParticles: HazeParticle[] = [];
+  private hazePoints: THREE.Points;
+  private hazePositions: Float32Array;
+  private hazeGeometry: THREE.BufferGeometry;
 
   // Lightning
   private lightningLight: THREE.PointLight;
@@ -65,35 +80,85 @@ export class WeatherEffects {
   // Internal time
   private time: number = 0;
 
+  // Quality caps
+  private maxRain: number;
+  private maxSnow: number;
+  private maxHaze: number;
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.group = new THREE.Group();
     this.group.name = 'weatherEffects';
     this.scene.add(this.group);
 
-    // Rain material: thin blue-white streaks
-    this.rainMaterial = new THREE.MeshBasicMaterial({
+    const qc = qualitySettings.getConfig();
+    this.maxRain = qc.maxRain;
+    this.maxSnow = qc.maxSnow;
+    this.maxHaze = qc.maxHaze;
+
+    // ─── Rain Points ──────────────────────────────────────
+    this.rainPositions = new Float32Array(this.maxRain * 3);
+    this.rainGeometry = new THREE.BufferGeometry();
+    this.rainGeometry.setAttribute('position',
+      new THREE.BufferAttribute(this.rainPositions, 3).setUsage(THREE.DynamicDrawUsage)
+    );
+    this.rainGeometry.setDrawRange(0, 0);
+
+    const rainMaterial = new THREE.PointsMaterial({
       color: 0xaabbdd,
       transparent: true,
-      opacity: 0.4
+      opacity: 0.5,
+      size: 1.5,
+      sizeAttenuation: true,
+      depthWrite: false,
     });
-    this.rainGeometry = new THREE.BoxGeometry(0.02, 0.4, 0.02);
+    this.rainPoints = new THREE.Points(this.rainGeometry, rainMaterial);
+    this.rainPoints.frustumCulled = false;
+    this.group.add(this.rainPoints);
 
-    // Snow material: white soft spheres
-    this.snowMaterial = new THREE.MeshBasicMaterial({
+    // ─── Snow Points ──────────────────────────────────────
+    this.snowPositions = new Float32Array(this.maxSnow * 3);
+    this.snowSizes = new Float32Array(this.maxSnow);
+    this.snowGeometry = new THREE.BufferGeometry();
+    this.snowGeometry.setAttribute('position',
+      new THREE.BufferAttribute(this.snowPositions, 3).setUsage(THREE.DynamicDrawUsage)
+    );
+    this.snowGeometry.setAttribute('size',
+      new THREE.BufferAttribute(this.snowSizes, 1).setUsage(THREE.DynamicDrawUsage)
+    );
+    this.snowGeometry.setDrawRange(0, 0);
+
+    const snowMaterial = new THREE.PointsMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: 0.8
+      opacity: 0.8,
+      size: 2.0,
+      sizeAttenuation: true,
+      depthWrite: false,
     });
-    this.snowGeometry = new THREE.SphereGeometry(0.04, 4, 3);
+    this.snowPoints = new THREE.Points(this.snowGeometry, snowMaterial);
+    this.snowPoints.frustumCulled = false;
+    this.group.add(this.snowPoints);
 
-    // Heat haze: semi-transparent warm-tinted quads
-    this.hazeMaterial = new THREE.MeshBasicMaterial({
+    // ─── Heat Haze Points ─────────────────────────────────
+    this.hazePositions = new Float32Array(this.maxHaze * 3);
+    this.hazeGeometry = new THREE.BufferGeometry();
+    this.hazeGeometry.setAttribute('position',
+      new THREE.BufferAttribute(this.hazePositions, 3).setUsage(THREE.DynamicDrawUsage)
+    );
+    this.hazeGeometry.setDrawRange(0, 0);
+
+    const hazeMaterial = new THREE.PointsMaterial({
       color: 0xffeecc,
       transparent: true,
-      opacity: 0.08,
-      side: THREE.DoubleSide
+      opacity: 0.06,
+      size: 8.0,
+      sizeAttenuation: true,
+      depthWrite: false,
     });
+    this.hazePoints = new THREE.Points(this.hazeGeometry, hazeMaterial);
+    this.hazePoints.frustumCulled = false;
+    this.group.add(this.hazePoints);
 
     // Lightning point light (starts off)
     this.lightningLight = new THREE.PointLight(0xeeeeff, 0, 80);
@@ -139,108 +204,108 @@ export class WeatherEffects {
 
   private updateRain(weather: WeatherRenderState, dt: number): void {
     const intensity = weather.rainIntensity;
-    const targetCount = Math.floor(intensity * this.MAX_RAIN);
+    const targetCount = Math.floor(intensity * this.maxRain);
 
-    // Spawn
-    while (this.rainDrops.length < targetCount) {
-      this.spawnRainDrop(weather);
+    // Spawn new rain particles
+    while (this.rainParticles.length < targetCount) {
+      const spread = 40;
+      this.rainParticles.push({
+        x: (Math.random() - 0.5) * spread,
+        y: 15 + Math.random() * 10,
+        z: (Math.random() - 0.5) * spread,
+        vy: -12 - Math.random() * 6,
+        life: 3,
+      });
     }
 
     // Update existing
-    for (let i = this.rainDrops.length - 1; i >= 0; i--) {
-      const drop = this.rainDrops[i];
-      drop.mesh.position.add(drop.velocity.clone().multiplyScalar(dt));
-
-      // Wind pushes rain sideways
-      drop.mesh.position.x += weather.windFactor * 3 * dt;
-
-      drop.life -= dt;
-      if (drop.mesh.position.y < -0.5 || drop.life <= 0) {
-        this.group.remove(drop.mesh);
-        this.rainDrops.splice(i, 1);
+    for (let i = this.rainParticles.length - 1; i >= 0; i--) {
+      const p = this.rainParticles[i];
+      p.y += p.vy * dt;
+      p.x += weather.windFactor * 3 * dt;
+      p.life -= dt;
+      if (p.y < -0.5 || p.life <= 0) {
+        // Swap-remove for performance
+        this.rainParticles[i] = this.rainParticles[this.rainParticles.length - 1];
+        this.rainParticles.pop();
       }
     }
 
     // Remove excess
-    while (this.rainDrops.length > targetCount + 10) {
-      const removed = this.rainDrops.pop()!;
-      this.group.remove(removed.mesh);
+    while (this.rainParticles.length > targetCount + 10) {
+      this.rainParticles.pop();
     }
-  }
 
-  private spawnRainDrop(weather: WeatherRenderState): void {
-    const mesh = new THREE.Mesh(this.rainGeometry, this.rainMaterial);
-    const spread = 40;
-    mesh.position.set(
-      (Math.random() - 0.5) * spread,
-      15 + Math.random() * 10,
-      (Math.random() - 0.5) * spread
-    );
-    mesh.rotation.z = weather.windFactor * 0.3;
-    this.group.add(mesh);
-
-    this.rainDrops.push({
-      mesh,
-      velocity: new THREE.Vector3(0, -12 - Math.random() * 6, 0),
-      life: 3
-    });
+    // Write positions to buffer
+    const count = this.rainParticles.length;
+    for (let i = 0; i < count; i++) {
+      const p = this.rainParticles[i];
+      this.rainPositions[i * 3] = p.x;
+      this.rainPositions[i * 3 + 1] = p.y;
+      this.rainPositions[i * 3 + 2] = p.z;
+    }
+    this.rainGeometry.attributes.position.needsUpdate = true;
+    this.rainGeometry.setDrawRange(0, count);
+    this.rainPoints.visible = count > 0;
   }
 
   // ─── Snow ─────────────────────────────────────────────────
 
   private updateSnow(weather: WeatherRenderState, dt: number): void {
     const intensity = weather.snowIntensity;
-    const targetCount = Math.floor(intensity * this.MAX_SNOW);
+    const targetCount = Math.floor(intensity * this.maxSnow);
 
     // Spawn
-    while (this.snowFlakes.length < targetCount) {
-      this.spawnSnowFlake();
+    while (this.snowParticles.length < targetCount) {
+      const spread = 40;
+      this.snowParticles.push({
+        x: (Math.random() - 0.5) * spread,
+        y: 12 + Math.random() * 8,
+        z: (Math.random() - 0.5) * spread,
+        vy: -1.2 - Math.random() * 0.8,
+        drift: Math.random() * Math.PI * 2,
+        phase: Math.random() * Math.PI * 2,
+        life: 12,
+        scale: 0.5 + Math.random() * 1,
+      });
     }
 
     // Update
-    for (let i = this.snowFlakes.length - 1; i >= 0; i--) {
-      const flake = this.snowFlakes[i];
-      flake.phase += dt * 2;
+    for (let i = this.snowParticles.length - 1; i >= 0; i--) {
+      const p = this.snowParticles[i];
+      p.phase += dt * 2;
 
       // Gentle sway
-      const sway = Math.sin(flake.phase + flake.drift) * 0.5;
-      flake.mesh.position.x += (sway + weather.windFactor * 1.5) * dt;
-      flake.mesh.position.y += flake.velocity.y * dt;
-      flake.mesh.position.z += Math.cos(flake.phase * 0.7) * 0.2 * dt;
+      const sway = Math.sin(p.phase + p.drift) * 0.5;
+      p.x += (sway + weather.windFactor * 1.5) * dt;
+      p.y += p.vy * dt;
+      p.z += Math.cos(p.phase * 0.7) * 0.2 * dt;
 
-      flake.life -= dt;
-      if (flake.mesh.position.y < -0.2 || flake.life <= 0) {
-        this.group.remove(flake.mesh);
-        this.snowFlakes.splice(i, 1);
+      p.life -= dt;
+      if (p.y < -0.2 || p.life <= 0) {
+        this.snowParticles[i] = this.snowParticles[this.snowParticles.length - 1];
+        this.snowParticles.pop();
       }
     }
 
     // Remove excess
-    while (this.snowFlakes.length > targetCount + 10) {
-      const removed = this.snowFlakes.pop()!;
-      this.group.remove(removed.mesh);
+    while (this.snowParticles.length > targetCount + 10) {
+      this.snowParticles.pop();
     }
-  }
 
-  private spawnSnowFlake(): void {
-    const mesh = new THREE.Mesh(this.snowGeometry, this.snowMaterial);
-    const spread = 40;
-    mesh.position.set(
-      (Math.random() - 0.5) * spread,
-      12 + Math.random() * 8,
-      (Math.random() - 0.5) * spread
-    );
-    const scale = 0.5 + Math.random() * 1;
-    mesh.scale.setScalar(scale);
-    this.group.add(mesh);
-
-    this.snowFlakes.push({
-      mesh,
-      velocity: new THREE.Vector3(0, -1.2 - Math.random() * 0.8, 0),
-      drift: Math.random() * Math.PI * 2,
-      phase: Math.random() * Math.PI * 2,
-      life: 12
-    });
+    // Write positions + sizes to buffer
+    const count = this.snowParticles.length;
+    for (let i = 0; i < count; i++) {
+      const p = this.snowParticles[i];
+      this.snowPositions[i * 3] = p.x;
+      this.snowPositions[i * 3 + 1] = p.y;
+      this.snowPositions[i * 3 + 2] = p.z;
+      this.snowSizes[i] = p.scale * 2.0;
+    }
+    this.snowGeometry.attributes.position.needsUpdate = true;
+    this.snowGeometry.attributes.size.needsUpdate = true;
+    this.snowGeometry.setDrawRange(0, count);
+    this.snowPoints.visible = count > 0;
   }
 
   // ─── Heat Haze ────────────────────────────────────────────
@@ -249,49 +314,57 @@ export class WeatherEffects {
     const intensity = weather.heatFactor;
 
     if (intensity < 0.05) {
-      // Remove all haze particles
-      for (const p of this.hazeParticles) {
-        this.group.remove(p);
-      }
-      this.hazeParticles = [];
+      this.hazeParticles.length = 0;
+      this.hazeGeometry.setDrawRange(0, 0);
+      this.hazePoints.visible = false;
       return;
     }
 
-    const targetCount = Math.floor(intensity * this.MAX_HAZE);
+    const targetCount = Math.floor(intensity * this.maxHaze);
 
     // Spawn
     while (this.hazeParticles.length < targetCount) {
-      const geom = new THREE.PlaneGeometry(2 + Math.random() * 3, 0.8 + Math.random());
-      const mesh = new THREE.Mesh(geom, this.hazeMaterial);
-      mesh.position.set(
-        (Math.random() - 0.5) * 30,
-        0.5 + Math.random() * 2,
-        (Math.random() - 0.5) * 30
-      );
-      mesh.rotation.y = Math.random() * Math.PI;
-      this.group.add(mesh);
-      this.hazeParticles.push(mesh);
+      this.hazeParticles.push({
+        x: (Math.random() - 0.5) * 30,
+        y: 0.5 + Math.random() * 2,
+        z: (Math.random() - 0.5) * 30,
+        rotationY: Math.random() * Math.PI,
+        life: 10 + Math.random() * 5,
+      });
     }
 
     // Animate: slow upward drift + shimmer
-    for (const p of this.hazeParticles) {
-      p.position.y += dt * 0.3;
-      if (p.material instanceof THREE.MeshBasicMaterial) {
-        p.material.opacity = 0.04 + Math.sin(this.time * 3 + p.position.x) * 0.03;
-      }
-      if (p.position.y > 4) {
-        p.position.y = 0.5;
-        p.position.x = (Math.random() - 0.5) * 30;
-        p.position.z = (Math.random() - 0.5) * 30;
+    const hazeMat = this.hazePoints.material as THREE.PointsMaterial;
+    for (let i = this.hazeParticles.length - 1; i >= 0; i--) {
+      const p = this.hazeParticles[i];
+      p.y += dt * 0.3;
+      p.life -= dt;
+      if (p.y > 4 || p.life <= 0) {
+        // Recycle
+        p.y = 0.5;
+        p.x = (Math.random() - 0.5) * 30;
+        p.z = (Math.random() - 0.5) * 30;
+        p.life = 10 + Math.random() * 5;
       }
     }
+    hazeMat.opacity = 0.04 + Math.sin(this.time * 3) * 0.02;
 
     // Remove excess
     while (this.hazeParticles.length > targetCount + 5) {
-      const removed = this.hazeParticles.pop()!;
-      this.group.remove(removed);
-      removed.geometry.dispose();
+      this.hazeParticles.pop();
     }
+
+    // Write positions
+    const count = this.hazeParticles.length;
+    for (let i = 0; i < count; i++) {
+      const p = this.hazeParticles[i];
+      this.hazePositions[i * 3] = p.x;
+      this.hazePositions[i * 3 + 1] = p.y;
+      this.hazePositions[i * 3 + 2] = p.z;
+    }
+    this.hazeGeometry.attributes.position.needsUpdate = true;
+    this.hazeGeometry.setDrawRange(0, count);
+    this.hazePoints.visible = count > 0;
   }
 
   // ─── Lightning ────────────────────────────────────────────
@@ -371,6 +444,9 @@ export class WeatherEffects {
       opacity: 0
     });
 
+    // Shared icicle geometry (reused for all icicles)
+    const icicleGeom = new THREE.ConeGeometry(0.06, 0.35, 4);
+
     // Small icicles scattered at various positions
     const iciclePositions = [
       { x: 3, z: 0 }, { x: -3, z: 0 }, { x: 0, z: 3 }, { x: 0, z: -3 },
@@ -379,10 +455,7 @@ export class WeatherEffects {
     ];
 
     for (const pos of iciclePositions) {
-      const icicle = new THREE.Mesh(
-        new THREE.ConeGeometry(0.06, 0.3 + Math.random() * 0.2, 4),
-        iceMat.clone()
-      );
+      const icicle = new THREE.Mesh(icicleGeom, iceMat.clone());
       icicle.position.set(pos.x, 2.5 + Math.random() * 2, pos.z);
       icicle.rotation.z = Math.PI; // point downward
       this.frostGroup.add(icicle);
@@ -392,23 +465,18 @@ export class WeatherEffects {
   // ─── Cleanup ──────────────────────────────────────────────
 
   dispose(): void {
-    for (const drop of this.rainDrops) this.group.remove(drop.mesh);
-    this.rainDrops = [];
-
-    for (const flake of this.snowFlakes) this.group.remove(flake.mesh);
-    this.snowFlakes = [];
-
-    for (const p of this.hazeParticles) {
-      this.group.remove(p);
-      p.geometry.dispose();
-    }
-    this.hazeParticles = [];
+    this.rainParticles.length = 0;
+    this.snowParticles.length = 0;
+    this.hazeParticles.length = 0;
 
     this.rainGeometry.dispose();
-    this.rainMaterial.dispose();
+    (this.rainPoints.material as THREE.Material).dispose();
+
     this.snowGeometry.dispose();
-    this.snowMaterial.dispose();
-    this.hazeMaterial.dispose();
+    (this.snowPoints.material as THREE.Material).dispose();
+
+    this.hazeGeometry.dispose();
+    (this.hazePoints.material as THREE.Material).dispose();
 
     if (this.snowGroundMesh) {
       this.snowGroundMesh.geometry.dispose();

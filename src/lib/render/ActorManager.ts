@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import type { RenderState } from '$lib/types';
 import { seededRandom } from '$lib/state/CastleState';
+import { qualitySettings } from './QualitySettings';
 
 // Guard patrol path point
 interface PatrolPoint {
@@ -39,9 +40,8 @@ interface Bird {
 }
 
 interface SmokeParticle {
-  mesh: THREE.Mesh;
-  position: THREE.Vector3;
-  velocity: THREE.Vector3;
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
   life: number;
   maxLife: number;
   startSize: number;
@@ -62,9 +62,14 @@ export class ActorManager {
   private birdTemplate: THREE.Group | null = null;
   private birdSpawnTimer: number = 0;
 
-  // Smoke
+  // Smoke — batched Points system (1 draw call instead of 60)
   private smokeParticles: SmokeParticle[] = [];
-  private smokeMaterial: THREE.MeshBasicMaterial;
+  private smokePoints: THREE.Points;
+  private smokePositions: Float32Array;
+  private smokeSizes: Float32Array;
+  private smokeOpacities: Float32Array;
+  private smokeGeometry: THREE.BufferGeometry;
+  private maxSmoke: number;
 
   // Chimney positions (set based on tier)
   private chimneyPositions: THREE.Vector3[] = [];
@@ -90,12 +95,32 @@ export class ActorManager {
     this.actorGroup.name = 'actors';
     this.scene.add(this.actorGroup);
 
-    this.smokeMaterial = new THREE.MeshBasicMaterial({
+    // Smoke Points system
+    const qc = qualitySettings.getConfig();
+    this.maxSmoke = qc.maxSmoke;
+    this.smokePositions = new Float32Array(this.maxSmoke * 3);
+    this.smokeSizes = new Float32Array(this.maxSmoke);
+    this.smokeOpacities = new Float32Array(this.maxSmoke);
+    this.smokeGeometry = new THREE.BufferGeometry();
+    this.smokeGeometry.setAttribute('position',
+      new THREE.BufferAttribute(this.smokePositions, 3).setUsage(THREE.DynamicDrawUsage)
+    );
+    this.smokeGeometry.setAttribute('size',
+      new THREE.BufferAttribute(this.smokeSizes, 1).setUsage(THREE.DynamicDrawUsage)
+    );
+    this.smokeGeometry.setDrawRange(0, 0);
+
+    const smokeMaterial = new THREE.PointsMaterial({
       color: 0x888888,
       transparent: true,
-      opacity: 0.3,
-      depthWrite: false
+      opacity: 0.25,
+      size: 3.0,
+      sizeAttenuation: true,
+      depthWrite: false,
     });
+    this.smokePoints = new THREE.Points(this.smokeGeometry, smokeMaterial);
+    this.smokePoints.frustumCulled = false;
+    this.actorGroup.add(this.smokePoints);
 
     this.createGuardTemplate();
     this.createBirdTemplate();
@@ -460,7 +485,8 @@ export class ActorManager {
   }
 
   /**
-   * Update smoke particles from chimneys
+   * Update smoke particles from chimneys.
+   * Uses batched Points system — 1 draw call for all smoke.
    */
   private updateSmoke(state: RenderState, dt: number): void {
     // Only emit smoke when active (not zombie/dead)
@@ -470,7 +496,7 @@ export class ActorManager {
           state.activityLevel === 'slow' ? 1 : 0.5;
 
       for (const chimneyPos of this.chimneyPositions) {
-        if (this.random() < emitRate * dt && this.smokeParticles.length < 60) {
+        if (this.random() < emitRate * dt && this.smokeParticles.length < this.maxSmoke) {
           this.spawnSmoke(chimneyPos);
         }
       }
@@ -480,59 +506,68 @@ export class ActorManager {
     for (let i = this.smokeParticles.length - 1; i >= 0; i--) {
       const s = this.smokeParticles[i];
       s.life -= dt;
-      s.position.add(s.velocity.clone().multiplyScalar(dt));
+
+      // Move
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.z += s.vz * dt;
 
       // Smoke rises and drifts
-      s.velocity.y *= 0.99;
-      s.velocity.x += (this.random() - 0.5) * 0.1 * dt;
-      s.velocity.z += (this.random() - 0.5) * 0.1 * dt;
-
-      s.mesh.position.copy(s.position);
-
-      // Expand and fade
-      const lifeRatio = s.life / s.maxLife;
-      const scale = s.startSize * (1 + (1 - lifeRatio) * 2);
-      s.mesh.scale.setScalar(scale);
-
-      if (s.mesh.material instanceof THREE.MeshBasicMaterial) {
-        s.mesh.material.opacity = lifeRatio * 0.25;
-      }
+      s.vy *= 0.99;
+      s.vx += (this.random() - 0.5) * 0.1 * dt;
+      s.vz += (this.random() - 0.5) * 0.1 * dt;
 
       if (s.life <= 0) {
-        this.actorGroup.remove(s.mesh);
-        s.mesh.geometry.dispose();
-        this.smokeParticles.splice(i, 1);
+        // Swap-remove
+        this.smokeParticles[i] = this.smokeParticles[this.smokeParticles.length - 1];
+        this.smokeParticles.pop();
       }
+    }
+
+    // Write to buffers
+    const count = this.smokeParticles.length;
+    for (let i = 0; i < count; i++) {
+      const s = this.smokeParticles[i];
+      this.smokePositions[i * 3] = s.x;
+      this.smokePositions[i * 3 + 1] = s.y;
+      this.smokePositions[i * 3 + 2] = s.z;
+
+      // Expand and fade: size grows, opacity decreases with life
+      const lifeRatio = s.life / s.maxLife;
+      this.smokeSizes[i] = s.startSize * (1 + (1 - lifeRatio) * 2) * 5; // scale for Points
+    }
+
+    this.smokeGeometry.attributes.position.needsUpdate = true;
+    this.smokeGeometry.attributes.size.needsUpdate = true;
+    this.smokeGeometry.setDrawRange(0, count);
+    this.smokePoints.visible = count > 0;
+
+    // Adjust overall opacity for fade effect (average life ratio)
+    if (count > 0) {
+      let avgLife = 0;
+      for (let i = 0; i < count; i++) {
+        avgLife += this.smokeParticles[i].life / this.smokeParticles[i].maxLife;
+      }
+      avgLife /= count;
+      (this.smokePoints.material as THREE.PointsMaterial).opacity = avgLife * 0.25;
     }
   }
 
   /**
-   * Spawn smoke particle at chimney position
+   * Spawn smoke particle at chimney position.
+   * Pure data — no mesh/geometry allocation.
    */
   private spawnSmoke(origin: THREE.Vector3): void {
-    const geom = new THREE.SphereGeometry(0.3, 4, 4);
-    const mat = this.smokeMaterial.clone();
-    const mesh = new THREE.Mesh(geom, mat);
-
-    const pos = origin.clone().add(new THREE.Vector3(
-      (this.random() - 0.5) * 0.3,
-      0,
-      (this.random() - 0.5) * 0.3
-    ));
-    mesh.position.copy(pos);
-    this.actorGroup.add(mesh);
-
     this.smokeParticles.push({
-      mesh,
-      position: pos.clone(),
-      velocity: new THREE.Vector3(
-        (this.random() - 0.5) * 0.3,
-        0.5 + this.random() * 0.5,
-        (this.random() - 0.5) * 0.3
-      ),
+      x: origin.x + (this.random() - 0.5) * 0.3,
+      y: origin.y,
+      z: origin.z + (this.random() - 0.5) * 0.3,
+      vx: (this.random() - 0.5) * 0.3,
+      vy: 0.5 + this.random() * 0.5,
+      vz: (this.random() - 0.5) * 0.3,
       life: 3 + this.random() * 3,
       maxLife: 6,
-      startSize: 0.2 + this.random() * 0.3
+      startSize: 0.2 + this.random() * 0.3,
     });
   }
 
@@ -558,19 +593,18 @@ export class ActorManager {
     }
     this.birds = [];
 
-    // Remove smoke
-    for (const s of this.smokeParticles) {
-      this.actorGroup.remove(s.mesh);
-      s.mesh.geometry.dispose();
-    }
+    // Clear smoke
     this.smokeParticles = [];
+    this.smokeGeometry.setDrawRange(0, 0);
+    this.smokePoints.visible = false;
 
     this.birdSpawnTimer = 0;
   }
 
   dispose(): void {
     this.reset(0);
-    this.smokeMaterial.dispose();
+    this.smokeGeometry.dispose();
+    (this.smokePoints.material as THREE.Material).dispose();
 
     if (this.guardTemplate) {
       this.guardTemplate.traverse(child => {
