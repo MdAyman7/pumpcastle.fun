@@ -12,8 +12,9 @@
  */
 
 import * as THREE from 'three';
-import type { RenderState, CastleTier } from '$lib/types';
+import type { RenderState, CastleTier, ExchangeListing } from '$lib/types';
 import type { WeatherRenderState } from '$lib/state/WeatherState';
+import { getTokenColors, getMaterialWear, categorizeExchanges, getMoodEmissiveScale, type TokenColors, type MaterialWear } from './TokenIdentity';
 
 interface Villager {
   mesh: THREE.Group;
@@ -45,10 +46,31 @@ export class OuterWorldBuilder {
   private festivalStalls: THREE.Group[] = [];
   private parkBuilt: boolean = false;
 
+  // Legendary landmarks (regal structures — fountains, statues, obelisks, torches)
+  private landmarkGroup: THREE.Group;
+  private landmarksBuilt: boolean = false;
+
+  // Legendary plazas (ceremonial gathering spaces along the approach)
+  private plazaGroup: THREE.Group;
+  private plazasBuilt: boolean = false;
+
+  // Legendary polish (soft ground glow, torch spill, material enhancements)
+  private polishGroup: THREE.Group;
+  private polishBuilt: boolean = false;
+
   // Animated villagers
   private villagers: Villager[] = [];
   private maxVillagers: number = 0;
   private spawnTimer: number = 0;
+
+  // Token identity (colors, wear, exchange markers)
+  private tokenColors: TokenColors = { primary: 0xcc2222, accent: 0xdd6644, trim: 0xc8a84e, fabric: 0xaa2222 };
+  private materialWear: MaterialWear = { roughnessBoost: 0, metalnessReduction: 0, emissiveScale: 1, saturationScale: 1 };
+  private identityApplied: boolean = false;
+
+  // Exchange trade markers (built once per token)
+  private tradeMarkerGroup: THREE.Group;
+  private tradeMarkersBuilt: boolean = false;
 
   // State tracking
   private currentTier: CastleTier | null = null;
@@ -65,6 +87,26 @@ export class OuterWorldBuilder {
     this.parkGroup.name = 'amusementPark';
     this.parkGroup.visible = false;
     this.group.add(this.parkGroup);
+
+    this.landmarkGroup = new THREE.Group();
+    this.landmarkGroup.name = 'legendaryLandmarks';
+    this.landmarkGroup.visible = false;
+    this.group.add(this.landmarkGroup);
+
+    this.plazaGroup = new THREE.Group();
+    this.plazaGroup.name = 'legendaryPlazas';
+    this.plazaGroup.visible = false;
+    this.group.add(this.plazaGroup);
+
+    this.polishGroup = new THREE.Group();
+    this.polishGroup.name = 'legendaryPolish';
+    this.polishGroup.visible = false;
+    this.group.add(this.polishGroup);
+
+    this.tradeMarkerGroup = new THREE.Group();
+    this.tradeMarkerGroup.name = 'tradeMarkers';
+    this.tradeMarkerGroup.visible = false;
+    this.group.add(this.tradeMarkerGroup);
   }
 
   private random(): number {
@@ -80,7 +122,7 @@ export class OuterWorldBuilder {
 
     const wallRadius = this.getWallRadius(tier);
 
-    this.buildPaths(wallRadius);
+    this.buildPaths(wallRadius, tier);
     this.buildGardens(wallRadius, tier);
     this.buildMarketStalls(wallRadius, tier);
     this.buildBenches(wallRadius, tier);
@@ -97,9 +139,28 @@ export class OuterWorldBuilder {
     }
   }
 
+  /**
+   * Returns the Z position of the castle gate for each tier.
+   * Must match CastleMeshBuilder.addGate() call positions exactly.
+   * The gate is the absolute anchor point for all road alignment.
+   */
+  private getGateZ(tier: CastleTier): number {
+    switch (tier) {
+      case 'keep': return 2;        // door frame at ~z=1.55
+      case 'castle': return 5.25;   // addGate(0, 0, 5.25, ...)
+      case 'fortress': return 8.5;  // addGate(0, 0, 8.5, ...)
+      case 'citadel': return 12.5;  // addGate(0, 0, outerRadius+0.5=12.5, ...)
+    }
+  }
+
   // ─── Paths ────────────────────────────────────────────────
 
-  private buildPaths(wallRadius: number): void {
+  private buildPaths(wallRadius: number, tier: CastleTier): void {
+    if (tier === 'citadel') {
+      this.buildLegendaryPaths(wallRadius);
+      return;
+    }
+
     const pathMat = new THREE.MeshStandardMaterial({
       color: 0xc4a672,
       roughness: 0.95,
@@ -107,12 +168,15 @@ export class OuterWorldBuilder {
     });
 
     // Main road going outward from gate (positive Z)
+    // Road starts at the actual gate position, not at wallRadius.
+    const gateZ = this.getGateZ(tier);
+    const roadLength = 30;
     const mainPath = new THREE.Mesh(
-      new THREE.PlaneGeometry(2.5, 30),
+      new THREE.PlaneGeometry(2.5, roadLength),
       pathMat
     );
     mainPath.rotation.x = -Math.PI / 2;
-    mainPath.position.set(0, 0.02, wallRadius + 15);
+    mainPath.position.set(0, 0.02, gateZ + roadLength / 2);
     mainPath.receiveShadow = true;
     this.group.add(mainPath);
     this.paths.push(mainPath);
@@ -156,14 +220,280 @@ export class OuterWorldBuilder {
     }
   }
 
+  // ─── Legendary Ceremonial Paths (spline-based, clean geometry) ────
+
+  /**
+   * Builds a grand ceremonial road system for Legendary/Citadel tier.
+   *
+   * Uses merged BufferGeometry from smooth spline curves instead of
+   * discrete PlaneGeometry tiles. This eliminates Z-fighting, seams,
+   * and gives roads a clean, intentional, regal feel.
+   *
+   * Layout:
+   *   - One wide ceremonial main avenue (gate → outward, +Z)
+   *   - Two symmetrical curved promenades branching from the ring
+   *   - A smooth ring boulevard around the castle
+   *   - Gold/stone accent borders on all roads
+   */
+  private buildLegendaryPaths(wallRadius: number): void {
+    // ─── Materials ──────────────────────────────────────────
+    const stoneMat = new THREE.MeshStandardMaterial({
+      color: 0xd4c5a0,   // warm sandstone — lighter than grass
+      roughness: 0.55,   // polished ceremonial stone — subtle light reflection
+      metalness: 0.08
+    });
+    const borderMat = new THREE.MeshStandardMaterial({
+      color: 0xc8a84e,   // gold-stone trim
+      roughness: 0.45,
+      metalness: 0.35,
+      emissive: 0xb8942e,
+      emissiveIntensity: 0.03
+    });
+
+    const ROAD_Y = 0.06;           // above terrain — prevents grass bleed-through
+    const MAIN_HALF_W = 2.0;       // main avenue half-width
+    const SIDE_HALF_W = 1.0;       // promenade half-width
+    const RING_HALF_W = 1.2;       // ring boulevard half-width (wider for visibility)
+    const BORDER_W = 0.12;         // border trim width
+    const RING_R = wallRadius + 6; // ring radius
+
+    // ─── Helper: create a flat ribbon mesh from a polyline ──
+    const createRibbon = (
+      points: THREE.Vector3[],
+      halfWidth: number,
+      material: THREE.Material,
+      yOffset: number = ROAD_Y
+    ): THREE.Mesh => {
+      // Build vertices: for each point, create left/right verts
+      // perpendicular to the path direction in the XZ plane.
+      const positions: number[] = [];
+      const normals: number[] = [];
+      const uvs: number[] = [];
+      const indices: number[] = [];
+
+      let accLen = 0; // accumulated length for UV
+
+      for (let i = 0; i < points.length; i++) {
+        // Direction tangent
+        let tx: number, tz: number;
+        if (i === 0) {
+          tx = points[1].x - points[0].x;
+          tz = points[1].z - points[0].z;
+        } else if (i === points.length - 1) {
+          tx = points[i].x - points[i - 1].x;
+          tz = points[i].z - points[i - 1].z;
+        } else {
+          tx = points[i + 1].x - points[i - 1].x;
+          tz = points[i + 1].z - points[i - 1].z;
+        }
+        // Normalize
+        const tLen = Math.sqrt(tx * tx + tz * tz) || 1;
+        tx /= tLen;
+        tz /= tLen;
+
+        // Perpendicular in XZ (rotate 90°)
+        const nx = -tz;
+        const nz = tx;
+
+        // Accumulated length for UV v-coordinate
+        if (i > 0) {
+          const dx = points[i].x - points[i - 1].x;
+          const dz = points[i].z - points[i - 1].z;
+          accLen += Math.sqrt(dx * dx + dz * dz);
+        }
+
+        const px = points[i].x;
+        const pz = points[i].z;
+
+        // Left vertex
+        positions.push(px + nx * halfWidth, yOffset, pz + nz * halfWidth);
+        normals.push(0, 1, 0);
+        uvs.push(0, accLen / (halfWidth * 4));
+
+        // Right vertex
+        positions.push(px - nx * halfWidth, yOffset, pz - nz * halfWidth);
+        normals.push(0, 1, 0);
+        uvs.push(1, accLen / (halfWidth * 4));
+
+        // Triangles (two triangles per quad)
+        if (i > 0) {
+          const v = (i - 1) * 2;
+          indices.push(v, v + 1, v + 2);
+          indices.push(v + 1, v + 3, v + 2);
+        }
+      }
+
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geom.setIndex(indices);
+
+      const mesh = new THREE.Mesh(geom, material);
+      mesh.receiveShadow = true;
+      return mesh;
+    };
+
+    // ─── Helper: sample a CatmullRom spline into polyline ────
+    const sampleSpline = (
+      controlPoints: THREE.Vector3[],
+      segments: number
+    ): THREE.Vector3[] => {
+      const curve = new THREE.CatmullRomCurve3(controlPoints, false, 'catmullrom', 0.5);
+      return curve.getPoints(segments);
+    };
+
+    // ─── Helper: create road + double border in one call ─────
+    const createRoad = (
+      points: THREE.Vector3[],
+      halfWidth: number
+    ): void => {
+      // Main road surface
+      const road = createRibbon(points, halfWidth, stoneMat, ROAD_Y);
+      this.group.add(road);
+      this.paths.push(road);
+
+      // Gold border: a slightly wider ribbon underneath the road surface.
+      // The stone road sits on top so only the gold edges peek out.
+      const border = createRibbon(points, halfWidth + BORDER_W, borderMat, ROAD_Y - 0.002);
+      this.group.add(border);
+      this.paths.push(border);
+    };
+
+    // Gate Z is the absolute anchor — all roads align to this point.
+    const gateZ = this.getGateZ('citadel');
+
+    // ─── 0. Inner Courtyard Ground ────────────────────────────
+    // Fills the entire zone between castle wall and ring road with stone.
+    // Without this the green terrain shows through, looking incomplete.
+    {
+      // A large disc centered on the castle covers the inner ceremonial zone.
+      // Outer radius matches ring road outer edge so there are no green gaps.
+      const courtyardMat = new THREE.MeshStandardMaterial({
+        color: 0xc8b890,    // warm stone, slightly darker than road
+        roughness: 0.65,
+        metalness: 0.05
+      });
+      const courtyard = new THREE.Mesh(
+        new THREE.CircleGeometry(RING_R + RING_HALF_W + 0.5, 64),
+        courtyardMat
+      );
+      courtyard.rotation.x = -Math.PI / 2;
+      courtyard.position.y = ROAD_Y - 0.01; // just below road surface
+      courtyard.receiveShadow = true;
+      this.group.add(courtyard);
+      this.paths.push(courtyard);
+
+      // Subtle inner border ring at castle wall edge
+      const innerBorderGeom = new THREE.RingGeometry(wallRadius + 0.5, wallRadius + 1.0, 48);
+      const innerBorder = new THREE.Mesh(innerBorderGeom, borderMat);
+      innerBorder.rotation.x = -Math.PI / 2;
+      innerBorder.position.y = ROAD_Y + 0.001;
+      this.group.add(innerBorder);
+      this.paths.push(innerBorder);
+    }
+
+    // ─── 1. Gate Approach: gate → ring boulevard ─────────────
+    // A straight, wide connector from the castle gate to the ring road.
+    // This is the most sacred axis — perfectly centered on x=0.
+    {
+      const pts = [
+        new THREE.Vector3(0, 0, gateZ),
+        new THREE.Vector3(0, 0, RING_R)
+      ];
+      createRoad(pts, MAIN_HALF_W);
+    }
+
+    // ─── 2. Grand Ceremonial Main Avenue (ring → outward) ────
+    // Continues the main axis from the ring boulevard outward.
+    // Perfectly straight, centered on x=0, same width as approach.
+    {
+      const endZ = gateZ + 30;
+      const controlPts = [
+        new THREE.Vector3(0, 0, RING_R),
+        new THREE.Vector3(0, 0, RING_R + 7),
+        new THREE.Vector3(0, 0, RING_R + 14),
+        new THREE.Vector3(0, 0, endZ)
+      ];
+      const points = sampleSpline(controlPts, 40);
+      createRoad(points, MAIN_HALF_W);
+    }
+
+    // ─── 3. Smooth Ring Boulevard around castle ──────────────
+    {
+      const ringSegCount = 80;
+      const ringPoints: THREE.Vector3[] = [];
+      for (let i = 0; i <= ringSegCount; i++) {
+        const a = (i / ringSegCount) * Math.PI * 2;
+        ringPoints.push(new THREE.Vector3(
+          Math.sin(a) * RING_R,
+          0,
+          Math.cos(a) * RING_R
+        ));
+      }
+      createRoad(ringPoints, RING_HALF_W);
+    }
+
+    // ─── 4. Symmetric Promenades (curves away from main axis) ─
+    // Two graceful promenades that branch from the ring at ±90°
+    // and curve OUTWARD and BACKWARD — never approaching the
+    // main +Z axis. They feel clearly subordinate.
+    {
+      for (const side of [-1, 1]) {
+        // Start at ±X on the ring (perpendicular to main axis)
+        const startX = side * RING_R;
+        const startZ = 0;
+
+        // Curve outward and slightly backward (−Z) to stay away from main axis
+        const midX = startX + side * 7;
+        const midZ = -3;
+
+        const endX = startX + side * 14;
+        const endZ = -6;
+
+        const controlPts = [
+          new THREE.Vector3(startX, 0, startZ),
+          new THREE.Vector3(midX, 0, midZ),
+          new THREE.Vector3(endX, 0, endZ)
+        ];
+        const points = sampleSpline(controlPts, 30);
+        createRoad(points, SIDE_HALF_W);
+      }
+    }
+
+    // ─── 5. Rear Processional Path (−Z, behind castle) ──────
+    // Aligned perfectly on x=0 axis, extending from ring behind castle.
+    // Narrower than main avenue — clearly subordinate.
+    {
+      const rearStartZ = -RING_R;
+      const rearEndZ = rearStartZ - 12;
+      const controlPts = [
+        new THREE.Vector3(0, 0, rearStartZ),
+        new THREE.Vector3(0, 0, (rearStartZ + rearEndZ) / 2),
+        new THREE.Vector3(0, 0, rearEndZ)
+      ];
+      const points = sampleSpline(controlPts, 20);
+      createRoad(points, SIDE_HALF_W);
+    }
+  }
+
   // ─── Gardens ──────────────────────────────────────────────
 
   private buildGardens(wallRadius: number, tier: CastleTier): void {
-    const gardenCount = tier === 'keep' ? 3 : tier === 'castle' ? 5 : tier === 'fortress' ? 7 : 10;
-    const gardenDist = wallRadius + 8;
+    // Legendary: fewer, curated gardens placed far from entrance/plazas
+    const isLeg = tier === 'citadel';
+    const gardenCount = tier === 'keep' ? 3 : tier === 'castle' ? 5 : tier === 'fortress' ? 7 : (isLeg ? 4 : 10);
+    const gardenDist = isLeg ? wallRadius + 14 : wallRadius + 8;
 
     for (let i = 0; i < gardenCount; i++) {
-      const angle = (i / gardenCount) * Math.PI * 2 + this.random() * 0.3;
+      // Legendary: place gardens only behind and to the sides (avoid +Z approach)
+      let angle: number;
+      if (isLeg) {
+        // Distribute in rear hemisphere (π/2 to 3π/2 → sides and back)
+        angle = Math.PI / 2 + (i / gardenCount) * Math.PI + this.random() * 0.2;
+      } else {
+        angle = (i / gardenCount) * Math.PI * 2 + this.random() * 0.3;
+      }
       const dist = gardenDist + this.random() * 6;
       const gx = Math.sin(angle) * dist;
       const gz = Math.cos(angle) * dist;
@@ -235,8 +565,28 @@ export class OuterWorldBuilder {
   // ─── Market Stalls ────────────────────────────────────────
 
   private buildMarketStalls(wallRadius: number, tier: CastleTier): void {
-    const stallCount = tier === 'keep' ? 1 : tier === 'castle' ? 3 : tier === 'fortress' ? 5 : 8;
-    const stallDist = wallRadius + 6;
+    const isLeg = tier === 'citadel';
+    // Legendary: drastically fewer stalls — plazas/landmarks carry the scene
+    const stallCount = tier === 'keep' ? 1 : tier === 'castle' ? 3 : tier === 'fortress' ? 5 : (isLeg ? 3 : 8);
+    const stallDist = isLeg ? wallRadius + 12 : wallRadius + 6;
+
+    if (isLeg) {
+      // Legendary: place stalls only along the side promenades, far from entrance
+      const sideAngles = [Math.PI * 0.6, Math.PI * 0.8, -Math.PI * 0.6];
+      for (let i = 0; i < stallCount; i++) {
+        const angle = sideAngles[i];
+        const stall = this.createStall();
+        stall.position.set(
+          Math.sin(angle) * stallDist,
+          0,
+          Math.cos(angle) * stallDist
+        );
+        stall.rotation.y = angle + Math.PI;
+        this.group.add(stall);
+        this.stalls.push(stall);
+      }
+      return;
+    }
 
     // Stalls along the main path
     for (let i = 0; i < stallCount; i++) {
@@ -314,11 +664,19 @@ export class OuterWorldBuilder {
   // ─── Benches ──────────────────────────────────────────────
 
   private buildBenches(wallRadius: number, tier: CastleTier): void {
-    const benchCount = tier === 'keep' ? 2 : tier === 'castle' ? 4 : tier === 'fortress' ? 6 : 10;
+    const isLeg = tier === 'citadel';
+    // Legendary: fewer benches, placed away from the ceremonial approach
+    const benchCount = tier === 'keep' ? 2 : tier === 'castle' ? 4 : tier === 'fortress' ? 6 : (isLeg ? 4 : 10);
 
     for (let i = 0; i < benchCount; i++) {
-      const angle = (i / benchCount) * Math.PI * 2 + this.random() * 0.5;
-      const dist = wallRadius + 5 + this.random() * 8;
+      let angle: number;
+      if (isLeg) {
+        // Only in rear/side areas (avoid the +Z approach)
+        angle = Math.PI * 0.4 + (i / benchCount) * Math.PI * 1.2 + this.random() * 0.3;
+      } else {
+        angle = (i / benchCount) * Math.PI * 2 + this.random() * 0.5;
+      }
+      const dist = wallRadius + (isLeg ? 10 : 5) + this.random() * 8;
       const bench = this.createBench();
       bench.position.set(Math.sin(angle) * dist, 0, Math.cos(angle) * dist);
       bench.rotation.y = angle + Math.PI / 2;
@@ -356,6 +714,9 @@ export class OuterWorldBuilder {
   // ─── Billboards / Signposts ───────────────────────────────
 
   private buildBillboards(wallRadius: number, tier: CastleTier): void {
+    // Legendary: no billboards — they break the regal, ceremonial feel
+    if (tier === 'citadel') return;
+
     const count = tier === 'keep' ? 1 : tier === 'castle' ? 2 : tier === 'fortress' ? 3 : 5;
 
     for (let i = 0; i < count; i++) {
@@ -416,11 +777,19 @@ export class OuterWorldBuilder {
   // ─── Lampposts ────────────────────────────────────────────
 
   private buildLampposts(wallRadius: number, tier: CastleTier): void {
-    const count = tier === 'keep' ? 2 : tier === 'castle' ? 4 : tier === 'fortress' ? 6 : 10;
+    // Legendary: fewer lampposts — plaza torches and landmark torches handle lighting
+    const isLeg = tier === 'citadel';
+    const count = tier === 'keep' ? 2 : tier === 'castle' ? 4 : tier === 'fortress' ? 6 : (isLeg ? 4 : 10);
 
     for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2;
-      const dist = wallRadius + 5;
+      let angle: number;
+      if (isLeg) {
+        // Place only in rear/side quadrants to avoid cluttering the approach
+        angle = Math.PI * 0.3 + (i / count) * Math.PI * 1.4;
+      } else {
+        angle = (i / count) * Math.PI * 2;
+      }
+      const dist = wallRadius + (isLeg ? 8 : 5);
       const lamp = this.createLamppost();
       lamp.position.set(Math.sin(angle) * dist, 0, Math.cos(angle) * dist);
       this.group.add(lamp);
@@ -700,6 +1069,1000 @@ export class OuterWorldBuilder {
         this.villagers.splice(i, 1);
       }
     }
+  }
+
+  // ─── Legendary Landmarks (fountains, statues, obelisks, torches) ──
+
+  private buildLandmarks(tier: CastleTier): void {
+    if (this.landmarksBuilt) return;
+    this.landmarksBuilt = true;
+
+    const wallRadius = this.getWallRadius(tier);
+    const RING_R_LM = wallRadius + 6;
+
+    // Paired statues flanking the INNER approach (between castle wall and ring)
+    // Placed just inside the courtyard, guarding the gate approach.
+    for (const side of [-1, 1]) {
+      const statue = this.createStatue();
+      statue.position.set(side * 3.0, 0, wallRadius + 3);
+      statue.rotation.y = side > 0 ? -0.15 : 0.15;
+      this.landmarkGroup.add(statue);
+    }
+
+    // Obelisk at −Z (rear) on the ring road only.
+    // ±X are handled by crossroad plazas, +Z by grand entrance plaza.
+    {
+      const obelisk = this.createObelisk();
+      obelisk.position.set(0, 0, -RING_R_LM);
+      obelisk.rotation.y = Math.PI;
+      this.landmarkGroup.add(obelisk);
+    }
+
+    // Torch-lined main avenue (pairs along the Z+ path)
+    // Must be OUTSIDE both the grand plaza (center z=20, r=6 → z<26)
+    // AND the waypoint plaza (center z=30, r=3.5 → z<33.5).
+    // Start torches past the waypoint plaza at z=34.5.
+    const torchStartZ = RING_R_LM + 14.5; // 34.5 — past waypoint plaza
+    const torchCount = 3;
+    for (let i = 0; i < torchCount; i++) {
+      const z = torchStartZ + i * 3;
+      for (const side of [-1, 1]) {
+        const torch = this.createTorch();
+        torch.position.set(side * 2.5, 0, z);
+        this.landmarkGroup.add(torch);
+      }
+    }
+
+    // Banners along the ring road — 4 banners at diagonal positions.
+    // Avoids: grand plaza (+Z ≈ 0°), crossroad plazas (±X ≈ ±90°), rear obelisk (−Z ≈ 180°).
+    // Placed at ~45°, ~135°, ~225°, ~315° — clean diagonal symmetry.
+    const RING_R = wallRadius + 6;
+    const bannerAngles = [
+      Math.PI * 0.25,   // front-right diagonal
+      Math.PI * 0.75,   // rear-right diagonal
+      Math.PI * 1.25,   // rear-left diagonal
+      Math.PI * 1.75    // front-left diagonal
+    ];
+    for (const angle of bannerAngles) {
+      const banner = this.createBanner();
+      banner.position.set(Math.sin(angle) * RING_R, 0, Math.cos(angle) * RING_R);
+      banner.rotation.y = angle + Math.PI; // face outward
+      this.landmarkGroup.add(banner);
+    }
+  }
+
+  private createStatue(): THREE.Group {
+    const statue = new THREE.Group();
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x9a9a8a, roughness: 0.6, metalness: 0.1 });
+    const goldMat = new THREE.MeshStandardMaterial({
+      color: 0xffd700, roughness: 0.3, metalness: 0.7,
+      emissive: 0xffa500, emissiveIntensity: 0.05
+    });
+
+    // Pedestal
+    const pedestal = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.5, 1.2), stoneMat);
+    pedestal.position.y = 0.75;
+    pedestal.castShadow = true;
+    statue.add(pedestal);
+
+    // Figure body
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.35, 1.2, 8), stoneMat);
+    body.position.y = 2.1;
+    body.castShadow = true;
+    statue.add(body);
+
+    // Head
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), stoneMat);
+    head.position.y = 2.85;
+    statue.add(head);
+
+    // Sword held upright
+    const sword = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.0, 0.02), goldMat);
+    sword.position.set(0.3, 2.6, 0);
+    statue.add(sword);
+
+    // Shield
+    const shield = new THREE.Mesh(new THREE.CircleGeometry(0.25, 6), stoneMat);
+    shield.position.set(-0.3, 2.2, 0.15);
+    shield.rotation.y = Math.PI / 3;
+    statue.add(shield);
+
+    return statue;
+  }
+
+  private createObelisk(): THREE.Group {
+    const obelisk = new THREE.Group();
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x7a7a6a, roughness: 0.5, metalness: 0.15 });
+    const goldMat = new THREE.MeshStandardMaterial({
+      color: 0xffd700, roughness: 0.2, metalness: 0.8,
+      emissive: 0xffa500, emissiveIntensity: 0.1
+    });
+
+    // Base
+    const base = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.4, 1.0), stoneMat);
+    base.position.y = 0.2;
+    base.castShadow = true;
+    obelisk.add(base);
+
+    // Shaft (tapered box)
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.35, 3.5, 4), stoneMat);
+    shaft.position.y = 2.15;
+    shaft.rotation.y = Math.PI / 4; // align edges
+    shaft.castShadow = true;
+    obelisk.add(shaft);
+
+    // Gold pyramid cap
+    const cap = new THREE.Mesh(new THREE.ConeGeometry(0.25, 0.5, 4), goldMat);
+    cap.position.y = 4.15;
+    cap.rotation.y = Math.PI / 4;
+    cap.castShadow = true;
+    obelisk.add(cap);
+
+    return obelisk;
+  }
+
+  private createTorch(): THREE.Group {
+    const torch = new THREE.Group();
+    const ironMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.5, metalness: 0.5 });
+
+    // Post
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 1.8, 6), ironMat);
+    post.position.y = 0.9;
+    post.castShadow = true;
+    torch.add(post);
+
+    // Bracket
+    const bracket = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.04, 0.04), ironMat);
+    bracket.position.set(0, 1.85, 0);
+    torch.add(bracket);
+
+    // Flame bowl
+    const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.08, 0.1, 6), ironMat);
+    bowl.position.y = 1.88;
+    torch.add(bowl);
+
+    // Flame glow
+    const flameMat = new THREE.MeshStandardMaterial({
+      color: 0xff6600,
+      emissive: 0xff4400,
+      emissiveIntensity: 0.8,
+      transparent: true,
+      opacity: 0.9
+    });
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.2, 6), flameMat);
+    flame.position.y = 2.05;
+    flame.name = 'flame';
+    torch.add(flame);
+
+    return torch;
+  }
+
+  /**
+   * Create a banner pole with fabric colored by token identity.
+   * The banner fabric uses the token's sigil color — every token
+   * gets a unique medieval palette derived from its symbol.
+   * Trim/finial metal reflects token health (gold → iron as decay increases).
+   */
+  private createBanner(): THREE.Group {
+    const banner = new THREE.Group();
+    const woodMat = new THREE.MeshStandardMaterial({
+      color: 0x5a4a3a,
+      roughness: 0.85 + this.materialWear.roughnessBoost
+    });
+
+    // Pole
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.06, 3, 6), woodMat);
+    pole.position.y = 1.5;
+    pole.castShadow = true;
+    banner.add(pole);
+
+    // Trim metal: token health determines gold vs iron
+    const trimMat = new THREE.MeshStandardMaterial({
+      color: this.tokenColors.trim,
+      roughness: 0.3 + this.materialWear.roughnessBoost,
+      metalness: 0.7 - this.materialWear.metalnessReduction
+    });
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 4), trimMat);
+    ball.position.y = 3.05;
+    banner.add(ball);
+
+    // Fabric banner — colored by token sigil identity
+    // Slight random variation (±10% lightness) so not all banners are identical
+    const colorVariation = 0.95 + this.random() * 0.1;
+    const fabricColor = new THREE.Color(this.tokenColors.fabric);
+    fabricColor.multiplyScalar(colorVariation);
+
+    const fabric = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.6, 1.2),
+      new THREE.MeshStandardMaterial({
+        color: fabricColor,
+        roughness: 0.65 + this.materialWear.roughnessBoost,
+        side: THREE.DoubleSide
+      })
+    );
+    fabric.position.set(0, 2.1, 0.05);
+    fabric.name = 'bannerFabric';
+    banner.add(fabric);
+
+    // Accent trim stripe at top of banner
+    const trim = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.65, 0.05),
+      trimMat
+    );
+    trim.position.set(0, 2.7, 0.06);
+    banner.add(trim);
+
+    return banner;
+  }
+
+  private updateLandmarks(state: RenderState): void {
+    if (!this.landmarksBuilt) return;
+
+    // Animate torch flames (flicker)
+    this.landmarkGroup.traverse((child) => {
+      if (child.name === 'flame' && child instanceof THREE.Mesh) {
+        const flicker = 1.0 + Math.sin(state.time * 8 + child.position.x * 3) * 0.15;
+        child.scale.setScalar(flicker);
+        child.position.y = 2.05 + Math.sin(state.time * 6) * 0.01;
+      }
+      // Banner wind sway
+      if (child.name === 'bannerFabric' && child instanceof THREE.Mesh) {
+        child.rotation.y = Math.sin(state.time * 1.5 + child.position.z * 0.5) * 0.08;
+      }
+      // Gold accent shimmer — slow emissive pulse on gold materials (caps, balls, shields)
+      if (child instanceof THREE.Mesh) {
+        const mat = child.material as THREE.MeshStandardMaterial;
+        if (mat.metalness >= 0.7 && mat.color && mat.color.getHex() === 0xffd700) {
+          // Slow golden shimmer — each element slightly offset by world position
+          const shimmer = 0.10 + Math.sin(state.time * 1.2 + child.position.x * 2 + child.position.z) * 0.05;
+          mat.emissiveIntensity = shimmer;
+        }
+      }
+    });
+  }
+
+  // ─── Legendary Plazas (ceremonial gathering spaces) ──────
+
+  /**
+   * Builds ceremonial plazas that break the road approach into a journey.
+   *
+   * Layout (all on the +Z main avenue axis):
+   *   1. Grand Entrance Plaza — large circular plaza where the main avenue
+   *      meets the ring boulevard. Acts as the primary arrival space.
+   *   2. Outer Waypoint Plaza — smaller circular plaza further along the
+   *      main avenue, breaking the long road stretch.
+   *   3. Ring Crossroad Plazas — two small plazas at the ±X ring/promenade
+   *      junctions, marking the boulevard intersections.
+   *
+   * Each plaza is a flat circular stone disc with gold border ring,
+   * furnished with symmetrical elements: fountain/statue at center,
+   * torch ring around perimeter, banner clusters at compass points.
+   */
+  private buildLegendaryPlazas(tier: CastleTier): void {
+    if (this.plazasBuilt) return;
+    this.plazasBuilt = true;
+
+    const wallRadius = this.getWallRadius(tier);
+    const RING_R = wallRadius + 6;
+    const ROAD_Y = 0.07; // above road surface (0.06) to layer cleanly atop roads
+
+    // ─── Shared materials ──────────────────────────────────
+    const plazaStoneMat = new THREE.MeshStandardMaterial({
+      color: 0xddd0b5,    // slightly lighter than road stone
+      roughness: 0.50,    // polished plaza stone — catches ambient light
+      metalness: 0.10
+    });
+    const plazaBorderMat = new THREE.MeshStandardMaterial({
+      color: 0xc8a84e,    // gold border ring
+      roughness: 0.40,
+      metalness: 0.40,
+      emissive: 0xb8942e,
+      emissiveIntensity: 0.04
+    });
+    const darkStoneMat = new THREE.MeshStandardMaterial({
+      color: 0x8a8a7a,
+      roughness: 0.55,
+      metalness: 0.12
+    });
+    const goldMat = new THREE.MeshStandardMaterial({
+      color: 0xffd700,
+      roughness: 0.25,
+      metalness: 0.70,
+      emissive: 0xffa500,
+      emissiveIntensity: 0.06
+    });
+    const waterMat = new THREE.MeshStandardMaterial({
+      color: 0x4488aa,
+      roughness: 0.15,
+      metalness: 0.3,
+      transparent: true,
+      opacity: 0.7
+    });
+
+    // ─── Helper: create a circular plaza disc ──────────────
+    const createPlazaDisc = (
+      cx: number, cz: number, radius: number
+    ): void => {
+      // Main stone surface
+      const discGeom = new THREE.CircleGeometry(radius, 48);
+      const disc = new THREE.Mesh(discGeom, plazaStoneMat);
+      disc.rotation.x = -Math.PI / 2;
+      disc.position.set(cx, ROAD_Y, cz);
+      disc.receiveShadow = true;
+      this.plazaGroup.add(disc);
+
+      // Gold border ring (slightly larger circle underneath)
+      const borderGeom = new THREE.RingGeometry(radius - 0.15, radius + 0.15, 48);
+      const border = new THREE.Mesh(borderGeom, plazaBorderMat);
+      border.rotation.x = -Math.PI / 2;
+      border.position.set(cx, ROAD_Y + 0.003, cz);
+      border.receiveShadow = true;
+      this.plazaGroup.add(border);
+
+      // Inner decorative ring (concentric accent at ~60% radius)
+      const innerRingGeom = new THREE.RingGeometry(radius * 0.58, radius * 0.62, 48);
+      const innerRing = new THREE.Mesh(innerRingGeom, plazaBorderMat);
+      innerRing.rotation.x = -Math.PI / 2;
+      innerRing.position.set(cx, ROAD_Y + 0.002, cz);
+      this.plazaGroup.add(innerRing);
+    };
+
+    // ─── Helper: create a fountain centerpiece ─────────────
+    const createFountain = (cx: number, cz: number): void => {
+      const fountain = new THREE.Group();
+      fountain.position.set(cx, 0, cz);
+
+      // Octagonal basin (outer)
+      const basin = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.6, 1.8, 0.5, 8),
+        darkStoneMat
+      );
+      basin.position.y = 0.25;
+      basin.castShadow = true;
+      fountain.add(basin);
+
+      // Water surface inside basin
+      const water = new THREE.Mesh(
+        new THREE.CircleGeometry(1.45, 24),
+        waterMat
+      );
+      water.rotation.x = -Math.PI / 2;
+      water.position.y = 0.48;
+      water.name = 'fountainWater';
+      fountain.add(water);
+
+      // Inner pedestal column
+      const pedestal = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.3, 0.4, 1.2, 8),
+        darkStoneMat
+      );
+      pedestal.position.y = 1.1;
+      pedestal.castShadow = true;
+      fountain.add(pedestal);
+
+      // Upper bowl (smaller, elevated)
+      const upperBowl = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.7, 0.5, 0.25, 8),
+        darkStoneMat
+      );
+      upperBowl.position.y = 1.8;
+      upperBowl.castShadow = true;
+      fountain.add(upperBowl);
+
+      // Water spout sphere at top
+      const spout = new THREE.Mesh(
+        new THREE.SphereGeometry(0.15, 8, 6),
+        goldMat
+      );
+      spout.position.y = 2.1;
+      fountain.add(spout);
+
+      // Upper water surface
+      const upperWater = new THREE.Mesh(
+        new THREE.CircleGeometry(0.55, 16),
+        waterMat
+      );
+      upperWater.rotation.x = -Math.PI / 2;
+      upperWater.position.y = 1.9;
+      upperWater.name = 'fountainWater';
+      fountain.add(upperWater);
+
+      this.plazaGroup.add(fountain);
+    };
+
+    // ─── Helper: create torch ring around a plaza ──────────
+    const createTorchRing = (
+      cx: number, cz: number, radius: number, count: number
+    ): void => {
+      const ironMat = new THREE.MeshStandardMaterial({
+        color: 0x3a3a3a, roughness: 0.5, metalness: 0.5
+      });
+      const flameMat = new THREE.MeshStandardMaterial({
+        color: 0xff6600,
+        emissive: 0xff4400,
+        emissiveIntensity: 0.8,
+        transparent: true,
+        opacity: 0.9
+      });
+
+      for (let i = 0; i < count; i++) {
+        const angle = (i / count) * Math.PI * 2;
+        const tx = cx + Math.sin(angle) * radius;
+        const tz = cz + Math.cos(angle) * radius;
+
+        const torch = new THREE.Group();
+        torch.position.set(tx, 0, tz);
+
+        // Post
+        const post = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.04, 0.06, 1.5, 6),
+          ironMat
+        );
+        post.position.y = 0.75;
+        post.castShadow = true;
+        torch.add(post);
+
+        // Bowl
+        const bowl = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.1, 0.07, 0.08, 6),
+          ironMat
+        );
+        bowl.position.y = 1.55;
+        torch.add(bowl);
+
+        // Flame
+        const flame = new THREE.Mesh(
+          new THREE.ConeGeometry(0.07, 0.18, 6),
+          flameMat
+        );
+        flame.position.y = 1.7;
+        flame.name = 'plazaFlame';
+        torch.add(flame);
+
+        this.plazaGroup.add(torch);
+      }
+    };
+
+    // ─── Helper: create banner cluster (pair flanking) ─────
+    const createBannerPair = (
+      cx: number, cz: number, facingAngle: number, spacing: number
+    ): void => {
+      const woodMat = new THREE.MeshStandardMaterial({
+        color: 0x5a4a3a, roughness: 0.85 + this.materialWear.roughnessBoost
+      });
+      const trimMat = new THREE.MeshStandardMaterial({
+        color: this.tokenColors.trim,
+        roughness: 0.3 + this.materialWear.roughnessBoost,
+        metalness: 0.7 - this.materialWear.metalnessReduction
+      });
+
+      for (const side of [-1, 1]) {
+        const bx = cx + Math.cos(facingAngle) * side * spacing;
+        const bz = cz - Math.sin(facingAngle) * side * spacing;
+
+        const banner = new THREE.Group();
+        banner.position.set(bx, 0, bz);
+
+        // Pole
+        const pole = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.035, 0.05, 2.6, 6),
+          woodMat
+        );
+        pole.position.y = 1.3;
+        pole.castShadow = true;
+        banner.add(pole);
+
+        // Finial — uses token trim metal
+        const finial = new THREE.Mesh(
+          new THREE.SphereGeometry(0.07, 6, 4),
+          trimMat
+        );
+        finial.position.y = 2.65;
+        banner.add(finial);
+
+        // Fabric — token sigil color with slight variation
+        const colorVariation = 0.9 + this.random() * 0.2;
+        const fabricColor = new THREE.Color(this.tokenColors.fabric);
+        fabricColor.multiplyScalar(colorVariation);
+        const fabric = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.5, 1.0),
+          new THREE.MeshStandardMaterial({
+            color: fabricColor,
+            roughness: 0.65 + this.materialWear.roughnessBoost,
+            side: THREE.DoubleSide
+          })
+        );
+        fabric.position.set(0, 1.85, 0.04);
+        fabric.name = 'plazaBannerFabric';
+        banner.add(fabric);
+
+        // Trim strip — token accent metal
+        const trimStrip = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.55, 0.04),
+          trimMat
+        );
+        trimStrip.position.set(0, 2.35, 0.05);
+        banner.add(trimStrip);
+
+        banner.rotation.y = facingAngle;
+        this.plazaGroup.add(banner);
+      }
+    };
+
+    // ═══════════════════════════════════════════════════════════
+    // 1. GRAND ENTRANCE PLAZA
+    //    Located where the main avenue meets the ring boulevard.
+    //    This is the primary arrival space — large, impressive.
+    //    Intentionally restrained: fountain + torch ring only.
+    //    Let the space breathe — grandeur through emptiness, not clutter.
+    // ═══════════════════════════════════════════════════════════
+    {
+      const plazaCZ = RING_R; // centered on the ring road intersection
+      const plazaRadius = 6.0; // larger radius for breathing room
+
+      createPlazaDisc(0, plazaCZ, plazaRadius);
+
+      // Central fountain — the singular focal point
+      createFountain(0, plazaCZ);
+
+      // Torch ring at perimeter edge — 6 torches (not 8), more spacing
+      createTorchRing(0, plazaCZ, plazaRadius * 0.82, 6);
+
+      // Only 2 banner pairs — flanking the main avenue entry and exit
+      createBannerPair(0, plazaCZ + plazaRadius * 0.9, 0, 1.5);          // north (outward)
+      createBannerPair(0, plazaCZ - plazaRadius * 0.9, Math.PI, 1.5);    // south (toward castle)
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 2. OUTER WAYPOINT PLAZA
+    //    Further along the main avenue, breaking the long road.
+    //    Smaller and more intimate — a moment of pause.
+    // ═══════════════════════════════════════════════════════════
+    {
+      const plazaCZ = RING_R + 10; // along the main avenue, past ring
+      const plazaRadius = 3.5;
+
+      createPlazaDisc(0, plazaCZ, plazaRadius);
+
+      // Central obelisk — the singular landmark here
+      const obelisk = this.createObelisk();
+      obelisk.position.set(0, 0, plazaCZ);
+      this.plazaGroup.add(obelisk);
+
+      // 4 torches at compass points
+      createTorchRing(0, plazaCZ, plazaRadius * 0.75, 4);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 3. RING CROSSROAD PLAZAS (×2)
+    //    Small plazas at the ±X ring/promenade junctions.
+    //    Mark the boulevard intersections symmetrically.
+    //    Minimal: just a disc + obelisk, no torches/banners.
+    // ═══════════════════════════════════════════════════════════
+    for (const side of [-1, 1]) {
+      const plazaCX = side * RING_R;
+      const plazaCZ = 0;
+      const plazaRadius = 2.8;
+
+      createPlazaDisc(plazaCX, plazaCZ, plazaRadius);
+
+      // Single obelisk at center — mirror of waypoint style
+      const obelisk = this.createObelisk();
+      obelisk.position.set(plazaCX, 0, plazaCZ);
+      obelisk.scale.setScalar(0.8);
+      this.plazaGroup.add(obelisk);
+    }
+  }
+
+  private updatePlazas(state: RenderState): void {
+    if (!this.plazasBuilt) return;
+
+    this.plazaGroup.traverse((child) => {
+      // Animate plaza torch flames
+      if (child.name === 'plazaFlame' && child instanceof THREE.Mesh) {
+        const flicker = 1.0 + Math.sin(state.time * 9 + child.position.x * 5 + child.position.z * 3) * 0.18;
+        child.scale.setScalar(flicker);
+        child.position.y = 1.7 + Math.sin(state.time * 7 + child.position.x) * 0.012;
+      }
+      // Banner sway
+      if (child.name === 'plazaBannerFabric' && child instanceof THREE.Mesh) {
+        child.rotation.y = Math.sin(state.time * 1.8 + child.position.z * 0.7 + child.position.x * 0.4) * 0.1;
+      }
+      // Fountain water shimmer (gentle scale pulse)
+      if (child.name === 'fountainWater' && child instanceof THREE.Mesh) {
+        const shimmer = 1.0 + Math.sin(state.time * 3 + child.position.x * 2) * 0.008;
+        child.scale.set(shimmer, shimmer, 1);
+      }
+    });
+  }
+
+  private clearPlazas(): void {
+    while (this.plazaGroup.children.length > 0) {
+      const child = this.plazaGroup.children[0];
+      this.plazaGroup.remove(child);
+      if (child instanceof THREE.Group) this.disposeGroup(child);
+      else if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        if (child.material instanceof THREE.Material) child.material.dispose();
+      }
+    }
+    this.plazasBuilt = false;
+  }
+
+  // ─── Legendary Polish (ground glow, torch spill, material sheen) ──
+
+  /**
+   * Adds final visual polish to the legendary environment.
+   * Everything here is purely visual — emissive-only meshes with
+   * no real PointLights (the zone light system handles actual lighting).
+   *
+   * Effects:
+   *   1. Soft ground glow along the main avenue — warm amber ribbon
+   *   2. Torch ground spill circles — faint warm circles beneath every torch
+   *   3. Ring boulevard glow — subtle ring of warmth around the castle
+   *   4. Gold accent shimmer — animated emissive pulse on gold elements
+   */
+  private buildLegendaryPolish(tier: CastleTier): void {
+    if (this.polishBuilt) return;
+    this.polishBuilt = true;
+
+    const wallRadius = this.getWallRadius(tier);
+    const RING_R = wallRadius + 6;
+    const gateZ = this.getGateZ(tier);
+
+    // ─── Shared glow material (warm amber, emissive-only) ────
+    const groundGlowMat = new THREE.MeshStandardMaterial({
+      color: 0x000000,
+      emissive: 0xffaa55,
+      emissiveIntensity: 0.12,
+      transparent: true,
+      opacity: 0.25,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+
+    const torchSpillMat = new THREE.MeshStandardMaterial({
+      color: 0x000000,
+      emissive: 0xff8833,
+      emissiveIntensity: 0.18,
+      transparent: true,
+      opacity: 0.20,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+
+    // ─── 1. Main Avenue Ground Glow ─────────────────────────
+    // A wide, soft amber ribbon along the main road center line.
+    // Creates a sense of warmth and ceremony guiding the eye to the gate.
+    {
+      const glowLength = gateZ + 30 - gateZ; // full avenue length
+      const glowWidth = 5.0; // wider than road for soft falloff
+      const glow = new THREE.Mesh(
+        new THREE.PlaneGeometry(glowWidth, glowLength),
+        groundGlowMat
+      );
+      glow.rotation.x = -Math.PI / 2;
+      glow.position.set(0, 0.065, gateZ + glowLength / 2);
+      glow.name = 'avenueGlow';
+      this.polishGroup.add(glow);
+    }
+
+    // ─── 2. Gate Approach Glow (gate → ring) ────────────────
+    // Slightly brighter glow for the sacred approach corridor.
+    {
+      const approachMat = groundGlowMat.clone();
+      approachMat.emissiveIntensity = 0.16;
+      approachMat.opacity = 0.30;
+
+      const approachLen = RING_R - gateZ;
+      const glow = new THREE.Mesh(
+        new THREE.PlaneGeometry(4.5, approachLen),
+        approachMat
+      );
+      glow.rotation.x = -Math.PI / 2;
+      glow.position.set(0, 0.065, gateZ + approachLen / 2);
+      glow.name = 'approachGlow';
+      this.polishGroup.add(glow);
+    }
+
+    // ─── 3. Ring Boulevard Glow ─────────────────────────────
+    // Soft circular glow ring around the castle, matching the boulevard.
+    {
+      const ringGlow = new THREE.Mesh(
+        new THREE.RingGeometry(RING_R - 1.8, RING_R + 1.8, 64),
+        groundGlowMat
+      );
+      ringGlow.rotation.x = -Math.PI / 2;
+      ringGlow.position.y = 0.065;
+      ringGlow.name = 'ringGlow';
+      this.polishGroup.add(ringGlow);
+    }
+
+    // ─── 4. Torch Ground Spill Circles ──────────────────────
+    // Small warm circles at the base of each torch along the main avenue.
+    // Must match torch positions in buildLandmarks (torchStartZ = RING_R+14.5).
+    {
+      const torchStartZ = RING_R + 14.5;
+      const torchCount = 3;
+      for (let i = 0; i < torchCount; i++) {
+        const z = torchStartZ + i * 3;
+        for (const side of [-1, 1]) {
+          const spill = new THREE.Mesh(
+            new THREE.CircleGeometry(1.2, 16),
+            torchSpillMat
+          );
+          spill.rotation.x = -Math.PI / 2;
+          spill.position.set(side * 2.5, 0.075, z);
+          spill.name = 'torchSpill';
+          this.polishGroup.add(spill);
+        }
+      }
+    }
+
+    // ─── 5. Plaza Torch Spill ───────────────────────────────
+    // Spill circles at plaza torch positions (must match plaza build counts).
+    {
+      const plazaSpillMat = torchSpillMat.clone();
+      plazaSpillMat.opacity = 0.15;
+
+      // Grand entrance plaza torches (6 torches at RING_R, radius 6.0 * 0.82)
+      const grandPlazaR = 6.0 * 0.82;
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * Math.PI * 2;
+        const spill = new THREE.Mesh(
+          new THREE.CircleGeometry(1.0, 12),
+          plazaSpillMat
+        );
+        spill.rotation.x = -Math.PI / 2;
+        spill.position.set(
+          Math.sin(angle) * grandPlazaR,
+          0.075,
+          RING_R + Math.cos(angle) * grandPlazaR
+        );
+        spill.name = 'torchSpill';
+        this.polishGroup.add(spill);
+      }
+
+      // Outer waypoint plaza torches (4 torches at RING_R+10, radius 3.5 * 0.75)
+      const waypointR = 3.5 * 0.75;
+      const waypointZ = RING_R + 10;
+      for (let i = 0; i < 4; i++) {
+        const angle = (i / 4) * Math.PI * 2;
+        const spill = new THREE.Mesh(
+          new THREE.CircleGeometry(0.8, 12),
+          plazaSpillMat
+        );
+        spill.rotation.x = -Math.PI / 2;
+        spill.position.set(
+          Math.sin(angle) * waypointR,
+          0.075,
+          waypointZ + Math.cos(angle) * waypointR
+        );
+        spill.name = 'torchSpill';
+        this.polishGroup.add(spill);
+      }
+      // Note: crossroad plazas have no torches, so no spill needed.
+    }
+
+    // ─── 6. Grand Plaza Fountain Glow ───────────────────────
+    // A soft blue-white circle at the grand fountain base,
+    // simulating water reflecting ambient light.
+    {
+      const waterGlowMat = new THREE.MeshStandardMaterial({
+        color: 0x000000,
+        emissive: 0x88bbdd,
+        emissiveIntensity: 0.10,
+        transparent: true,
+        opacity: 0.18,
+        depthWrite: false,
+        side: THREE.DoubleSide
+      });
+      const waterGlow = new THREE.Mesh(
+        new THREE.CircleGeometry(2.2, 24),
+        waterGlowMat
+      );
+      waterGlow.rotation.x = -Math.PI / 2;
+      waterGlow.position.set(0, 0.075, RING_R);
+      waterGlow.name = 'fountainGlow';
+      this.polishGroup.add(waterGlow);
+    }
+  }
+
+  private updatePolish(state: RenderState): void {
+    if (!this.polishBuilt) return;
+
+    // Gentle breathing pulse on all glow elements — slow, subtle, powerful.
+    // Different elements pulse at slightly different rates for organic feel.
+    this.polishGroup.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const mat = child.material as THREE.MeshStandardMaterial;
+      if (!mat.emissive) return;
+
+      if (child.name === 'avenueGlow' || child.name === 'approachGlow') {
+        // Main avenue: very slow breath (6s period)
+        const breath = 1.0 + Math.sin(state.time * 1.05) * 0.08;
+        mat.opacity = (child.name === 'approachGlow' ? 0.30 : 0.25) * breath;
+      } else if (child.name === 'ringGlow') {
+        // Ring: slower breath offset from avenue
+        const breath = 1.0 + Math.sin(state.time * 0.8 + 1.5) * 0.06;
+        mat.opacity = 0.25 * breath;
+      } else if (child.name === 'torchSpill') {
+        // Torch spill: gentle flicker matching torch flame rhythm
+        const flicker = 1.0 + Math.sin(state.time * 7 + child.position.x * 3 + child.position.z * 2) * 0.15;
+        mat.opacity = 0.18 * flicker;
+      } else if (child.name === 'fountainGlow') {
+        // Fountain: gentle shimmer
+        const shimmer = 1.0 + Math.sin(state.time * 2.5 + 0.8) * 0.10;
+        mat.opacity = 0.18 * shimmer;
+      }
+    });
+  }
+
+  private clearPolish(): void {
+    while (this.polishGroup.children.length > 0) {
+      const child = this.polishGroup.children[0];
+      this.polishGroup.remove(child);
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        if (child.material instanceof THREE.Material) child.material.dispose();
+      }
+    }
+    this.polishBuilt = false;
+  }
+
+  // ─── Exchange Trade Markers ──────────────────────────────
+  //
+  // Each exchange listing becomes a simplified trade marker (banner/post)
+  // placed along the main avenue or ring road. Markers indicate prosperity
+  // and trade connections — more exchanges = more prosperous atmosphere.
+  //
+  // Major CEX = tall flag near the grand plaza
+  // Small CEX = medium flag along the avenue
+  // DEX = small marker post along the ring road
+
+  private buildTradeMarkers(state: RenderState): void {
+    if (this.tradeMarkersBuilt) return;
+    this.tradeMarkersBuilt = true;
+
+    const { exchanges } = state;
+    if (!exchanges || exchanges.length === 0) return;
+
+    const wallRadius = this.getWallRadius(state.tier);
+    const RING_R = wallRadius + 6;
+    const { major, minor, dex } = categorizeExchanges(exchanges);
+
+    const markerWoodMat = new THREE.MeshStandardMaterial({
+      color: 0x6a5a4a, roughness: 0.8
+    });
+
+    // ─── Major CEX: tall allied banners near grand plaza entrance ───
+    // These are the most prestigious — placed flanking the main avenue
+    // just outside the grand plaza, symmetrically.
+    major.forEach((exchange, i) => {
+      const side = i % 2 === 0 ? 1 : -1;
+      const offset = Math.floor(i / 2) * 2.5;
+      const z = RING_R + 6.5 + offset; // Just past grand plaza edge
+      const x = side * 4.5; // Outside the main avenue width
+
+      const marker = new THREE.Group();
+      marker.position.set(x, 0, z);
+
+      // Tall pole
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.07, 3.5, 6),
+        markerWoodMat
+      );
+      pole.position.y = 1.75;
+      pole.castShadow = true;
+      marker.add(pole);
+
+      // Large pennant — accent color (exchange identity abstracted)
+      const pennantColor = new THREE.Color(this.tokenColors.accent);
+      pennantColor.offsetHSL(i * 0.05, 0, 0); // Slight hue variation per exchange
+      const pennant = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.8, 1.4),
+        new THREE.MeshStandardMaterial({
+          color: pennantColor, roughness: 0.6, side: THREE.DoubleSide
+        })
+      );
+      pennant.position.set(0, 2.6, 0.05);
+      pennant.name = 'tradeMarkerFabric';
+      marker.add(pennant);
+
+      // Gold cap
+      const cap = new THREE.Mesh(
+        new THREE.SphereGeometry(0.1, 6, 4),
+        new THREE.MeshStandardMaterial({
+          color: this.tokenColors.trim, roughness: 0.3, metalness: 0.7
+        })
+      );
+      cap.position.y = 3.55;
+      marker.add(cap);
+
+      marker.rotation.y = side > 0 ? -0.1 : 0.1; // Slight inward tilt
+      this.tradeMarkerGroup.add(marker);
+    });
+
+    // ─── Small CEX: medium markers along the avenue ───
+    minor.forEach((exchange, i) => {
+      const side = i % 2 === 0 ? 1 : -1;
+      const z = RING_R + 12 + i * 2; // Further along the avenue
+      const x = side * 3.8;
+
+      const marker = new THREE.Group();
+      marker.position.set(x, 0, z);
+
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04, 0.06, 2.5, 6),
+        markerWoodMat
+      );
+      pole.position.y = 1.25;
+      marker.add(pole);
+
+      // Smaller flag
+      const flagColor = new THREE.Color(this.tokenColors.primary);
+      flagColor.offsetHSL(i * 0.08, -0.1, 0.05);
+      const flag = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.5, 0.8),
+        new THREE.MeshStandardMaterial({
+          color: flagColor, roughness: 0.7, side: THREE.DoubleSide
+        })
+      );
+      flag.position.set(0, 2.0, 0.04);
+      flag.name = 'tradeMarkerFabric';
+      marker.add(flag);
+
+      this.tradeMarkerGroup.add(marker);
+    });
+
+    // ─── DEX: small post markers along the ring road ───
+    dex.forEach((exchange, i) => {
+      // Distribute evenly around the ring, avoiding main axis and plazas
+      const angle = Math.PI * 0.1 + (i / Math.max(dex.length, 1)) * Math.PI * 0.8;
+      const side = i % 2 === 0 ? 1 : -1;
+      const a = angle * side;
+      const x = Math.sin(a) * (RING_R + 2.5);
+      const z = Math.cos(a) * (RING_R + 2.5);
+
+      const marker = new THREE.Group();
+      marker.position.set(x, 0, z);
+
+      // Short post with shield marker
+      const post = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.03, 0.04, 1.5, 6),
+        markerWoodMat
+      );
+      post.position.y = 0.75;
+      marker.add(post);
+
+      // Small shield/emblem
+      const shieldColor = new THREE.Color(this.tokenColors.fabric);
+      shieldColor.offsetHSL(i * 0.06, -0.05, 0.08);
+      const shield = new THREE.Mesh(
+        new THREE.CircleGeometry(0.2, 6),
+        new THREE.MeshStandardMaterial({
+          color: shieldColor, roughness: 0.5, metalness: 0.2, side: THREE.DoubleSide
+        })
+      );
+      shield.position.set(0, 1.3, 0.03);
+      marker.add(shield);
+
+      marker.rotation.y = a + Math.PI;
+      this.tradeMarkerGroup.add(marker);
+    });
+  }
+
+  private clearTradeMarkers(): void {
+    while (this.tradeMarkerGroup.children.length > 0) {
+      const child = this.tradeMarkerGroup.children[0];
+      this.tradeMarkerGroup.remove(child);
+      if (child instanceof THREE.Group) this.disposeGroup(child);
+      else if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        if (child.material instanceof THREE.Material) child.material.dispose();
+      }
+    }
+    this.tradeMarkersBuilt = false;
   }
 
   // ─── Legendary Amusement Park ─────────────────────────────
@@ -1059,6 +2422,14 @@ export class OuterWorldBuilder {
   // ─── Main update ──────────────────────────────────────────
 
   update(state: RenderState, weather?: WeatherRenderState): void {
+    // ─── Token Identity ─────────────────────────────────────
+    // Recompute identity colors when state updates (cheap — just hash + math).
+    // This drives banner colors, material wear, trim metals, and glow intensity.
+    if (state.tokenSymbol) {
+      this.tokenColors = getTokenColors(state.tokenSymbol, state.decay);
+      this.materialWear = getMaterialWear(state);
+    }
+
     // Build world structures when tier changes
     if (state.tier !== this.builtForTier && state.hasGraduated) {
       this.buildOuterWorld(state.tier);
@@ -1080,6 +2451,54 @@ export class OuterWorldBuilder {
 
     if (state.isLegendary) {
       this.updateAmusementPark(state);
+    }
+
+    // Legendary landmarks (fountains, statues, obelisks, torches)
+    if (state.isLegendary && !this.landmarksBuilt) {
+      this.buildLandmarks(state.tier);
+      this.landmarkGroup.visible = true;
+    }
+    if (this.landmarkGroup.visible !== state.isLegendary) {
+      this.landmarkGroup.visible = state.isLegendary;
+    }
+
+    if (state.isLegendary) {
+      this.updateLandmarks(state);
+    }
+
+    // Legendary plazas (ceremonial arrival spaces)
+    if (state.isLegendary && !this.plazasBuilt) {
+      this.buildLegendaryPlazas(state.tier);
+      this.plazaGroup.visible = true;
+    }
+    if (this.plazaGroup.visible !== state.isLegendary) {
+      this.plazaGroup.visible = state.isLegendary;
+    }
+
+    if (state.isLegendary) {
+      this.updatePlazas(state);
+    }
+
+    // Legendary polish (soft ground glow, torch spill, material enhancements)
+    if (state.isLegendary && !this.polishBuilt) {
+      this.buildLegendaryPolish(state.tier);
+      this.polishGroup.visible = true;
+    }
+    if (this.polishGroup.visible !== state.isLegendary) {
+      this.polishGroup.visible = state.isLegendary;
+    }
+
+    if (state.isLegendary) {
+      this.updatePolish(state);
+    }
+
+    // Exchange trade markers (visible for any graduated token with exchanges)
+    if (state.hasGraduated && state.exchangeCount > 0 && !this.tradeMarkersBuilt) {
+      this.buildTradeMarkers(state);
+      this.tradeMarkerGroup.visible = true;
+    }
+    if (this.tradeMarkerGroup.visible !== (state.hasGraduated && state.exchangeCount > 0)) {
+      this.tradeMarkerGroup.visible = state.hasGraduated && state.exchangeCount > 0;
     }
 
     // Manage villager population
@@ -1139,6 +2558,18 @@ export class OuterWorldBuilder {
 
     // Clear park
     this.clearPark();
+
+    // Clear landmarks
+    this.clearLandmarks();
+
+    // Clear plazas
+    this.clearPlazas();
+
+    // Clear polish
+    this.clearPolish();
+
+    // Clear trade markers
+    this.clearTradeMarkers();
   }
 
   private clearPark(): void {
@@ -1155,6 +2586,19 @@ export class OuterWorldBuilder {
     this.carousel = null;
     this.festivalStalls = [];
     this.parkBuilt = false;
+  }
+
+  private clearLandmarks(): void {
+    while (this.landmarkGroup.children.length > 0) {
+      const child = this.landmarkGroup.children[0];
+      this.landmarkGroup.remove(child);
+      if (child instanceof THREE.Group) this.disposeGroup(child);
+      else if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        if (child.material instanceof THREE.Material) child.material.dispose();
+      }
+    }
+    this.landmarksBuilt = false;
   }
 
   private disposeGroup(group: THREE.Group): void {

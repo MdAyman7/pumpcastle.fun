@@ -1,4 +1,4 @@
 export { BuilderSystem } from './BuilderSystem';
 export { CreatureSystem } from './CreatureSystem';
 export { EnvironmentSystem } from './EnvironmentSystem';
-export { ParticleSystem } from './ParticleSystem';
+// ParticleSystem (2D canvas) removed — unused. 3D effects handled by EffectsManager.

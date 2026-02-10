@@ -7,6 +7,7 @@
 
 import * as THREE from 'three';
 import type { RenderState } from '$lib/types';
+import { getAudioCueSystem } from '$lib/audio/AudioCueSystem';
 
 export type MicroEventType =
   | 'volume_spike'       // Volume doubles → builders cheer
@@ -196,14 +197,21 @@ export class EventSystem {
    * Handle event start - spawn initial visuals
    */
   private onEventStart(type: MicroEventType, intensity: number): void {
+    // Fire audio cue (non-blocking, gracefully fails if disabled/unavailable)
+    const audio = getAudioCueSystem();
     switch (type) {
       case 'new_ath':
+        audio.play('new_ath');
+        this.spawnFireworks(8 + Math.floor(intensity * 8));
+        break;
+
       case 'legendary_reach':
-        this.spawnFireworks(15 + Math.floor(intensity * 20));
+        audio.play('legendary_reach');
+        this.spawnFireworks(8 + Math.floor(intensity * 8));
         break;
 
       case 'sudden_dump':
-        // Flash red
+        audio.play('sudden_dump');
         if (this.flashLight) {
           this.flashLight.color.setHex(0xff2200);
           this.flashLight.intensity = 3 * intensity;
@@ -211,7 +219,8 @@ export class EventSystem {
         break;
 
       case 'graduation':
-        this.spawnFireworks(30);
+        audio.play('graduation');
+        this.spawnFireworks(12);
         if (this.flashLight) {
           this.flashLight.color.setHex(0xffd700);
           this.flashLight.intensity = 4;
@@ -219,6 +228,7 @@ export class EventSystem {
         break;
 
       case 'volume_spike':
+        audio.play('volume_spike');
         if (this.flashLight) {
           this.flashLight.color.setHex(0x44ff44);
           this.flashLight.intensity = 2 * intensity;
@@ -226,6 +236,7 @@ export class EventSystem {
         break;
 
       case 'zombie_rise':
+        audio.play('zombie_rise');
         if (this.flashLight) {
           this.flashLight.color.setHex(0x44ff44);
           this.flashLight.intensity = 2;
@@ -233,6 +244,7 @@ export class EventSystem {
         break;
 
       case 'recovery':
+        audio.play('recovery');
         if (this.flashLight) {
           this.flashLight.color.setHex(0xffeebb);
           this.flashLight.intensity = 1.5;

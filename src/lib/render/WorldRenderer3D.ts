@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import type { TokenData, WorldState, RenderState } from '$lib/types';
 import { computeWorldState, hashString, seededRandom } from '$lib/state/CastleState';
+import { getPriceMoodColor } from '$lib/render/TokenIdentity';
 import { computeTimeInfo } from '$lib/state/TimeState';
 import type { TimeInfo } from '$lib/state/TimeState';
 import { getCelebrationProgress, resetGraduationState } from '$lib/state/GraduationState';
@@ -31,6 +32,8 @@ import { OuterWorldBuilder } from './OuterWorldBuilder';
 import { WeatherEffects } from './WeatherEffects';
 import { qualitySettings } from './QualitySettings';
 import type { QualityConfig } from './QualitySettings';
+import { getMusicManager } from '$lib/audio/MusicManager';
+import type { MusicManager } from '$lib/audio/MusicManager';
 
 export class WorldRenderer3D {
   // Three.js core
@@ -58,6 +61,7 @@ export class WorldRenderer3D {
   private outerWorldBuilder: OuterWorldBuilder;
   private weatherState: WeatherState;
   private weatherEffects: WeatherEffects;
+  private musicManager: MusicManager;
 
   // Lighting
   private sunLight!: THREE.DirectionalLight;
@@ -148,6 +152,11 @@ export class WorldRenderer3D {
   // Seed
   private seed: number = 12345;
 
+  // Scene readiness (prevents showing incomplete frames during token switch)
+  private sceneReady: boolean = false;
+  private framesAfterNewToken: number = 0;
+  private static readonly FRAMES_UNTIL_READY = 3;
+
   // Bound event handlers (for cleanup)
   private onMouseDown: (e: MouseEvent) => void;
   private onMouseMove: (e: MouseEvent) => void;
@@ -220,6 +229,7 @@ export class WorldRenderer3D {
     this.outerWorldBuilder = new OuterWorldBuilder(this.scene, this.seed);
     this.weatherState = new WeatherState();
     this.weatherEffects = new WeatherEffects(this.scene);
+    this.musicManager = getMusicManager();
 
     // Terrain
     this.environmentBuilder.buildTerrain();
@@ -927,6 +937,10 @@ export class WorldRenderer3D {
       // Reset orbit offset on new token
       this.dragOrbitYaw = 0;
       this.dragOrbitPitch = 0;
+
+      // Scene not ready until castle is built and camera settled
+      this.sceneReady = false;
+      this.framesAfterNewToken = 0;
     }
 
     this.currentTokenData = tokenData;
@@ -935,6 +949,11 @@ export class WorldRenderer3D {
     this.targetDecay = this.worldState.decay;
     this.targetVolume = this.worldState.volumeRatio;
     this.targetConstruction = this.worldState.constructionProgress;
+
+    // Rebuild trees with road exclusion zones based on current state
+    if (isNewToken) {
+      this.environmentBuilder.addTrees(this.worldState.tier, this.worldState.isLegendary);
+    }
 
     this.memoryState.update(this.worldState);
     this.updateCameraTarget();
@@ -987,6 +1006,16 @@ export class WorldRenderer3D {
     }
   }
 
+  /** Pause rendering loop without destroying the scene. */
+  pause(): void {
+    this.stop();
+  }
+
+  /** Resume rendering loop after a pause. */
+  resume(): void {
+    this.start();
+  }
+
   private animate = (): void => {
     const now = performance.now();
     const deltaTime = Math.min(100, now - this.lastTime);
@@ -1026,6 +1055,24 @@ export class WorldRenderer3D {
     this.castleBuilder.setLightLOD(cameraDist);
     if (this.performanceScale < 0.95) {
       this.castleBuilder.applyPerformanceScale(this.performanceScale);
+    }
+
+    // Track scene readiness after new token
+    if (!this.sceneReady && this.worldState) {
+      this.framesAfterNewToken++;
+      if (this.framesAfterNewToken >= WorldRenderer3D.FRAMES_UNTIL_READY) {
+        this.sceneReady = true;
+      }
+    }
+
+    // During warm-up: push fog very close to hide incomplete geometry,
+    // and snap camera to target instead of lerping from a stale position
+    if (!this.sceneReady && this.worldState) {
+      this.fog.near = 0;
+      this.fog.far = 5;
+      // Snap camera to target position immediately (no smooth lerp)
+      this.camera.position.copy(this.baseCameraPosition);
+      this.camera.lookAt(this.baseLookAt);
     }
 
     this.update(deltaTime);
@@ -1090,6 +1137,7 @@ export class WorldRenderer3D {
       this.actorManager.update(this.renderState);
     }
     this.eventSystem.update(this.renderState, deltaTime);
+    this.musicManager.update(this.renderState);
     this.physicsMotion.update(this.renderState, weather);
     this.memoryRenderer.update(this.memoryState.getMemory());
     if (qualitySettings.shouldUpdateThisFrame(this.frameCount, qc.actorUpdateInterval)) {
@@ -1381,6 +1429,19 @@ export class WorldRenderer3D {
         this.castleKeyLight.intensity *= 1.10;
       }
 
+      // ─── Price Mood Accent Tinting ─────────────────────────
+      // Subtly tints the castle key light warm (bullish) or cool (bearish).
+      // Never recolors the entire castle — just a gentle accent shift.
+      // priceMood: -1 (bearish) → 0 (neutral) → +1 (bullish)
+      if (this.renderState.priceMood !== undefined) {
+        const moodColor = getPriceMoodColor(this.renderState.priceMood);
+        if (moodColor) {
+          // Blend at most 15% toward mood color — subtlety is mandatory
+          const blendStrength = Math.min(0.15, Math.abs(this.renderState.priceMood) * 0.18);
+          this.castleKeyLight.color.lerp(moodColor, blendStrength);
+        }
+      }
+
       // Decay dims castle lights (but less than it dims the sun)
       const decayDim = 1 - this.renderState.smoothDecay * (this.renderState.isLegendary ? 0.15 : 0.30);
       this.castleKeyLight.intensity *= decayDim;
@@ -1434,6 +1495,11 @@ export class WorldRenderer3D {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+  }
+
+  /** True once the scene has had enough frames to build geometry and settle camera. */
+  isSceneReady(): boolean {
+    return this.sceneReady;
   }
 
   getWorldState(): WorldState | null {
@@ -1537,6 +1603,7 @@ export class WorldRenderer3D {
     this.memoryRenderer.dispose();
     this.outerWorldBuilder.dispose();
     this.weatherEffects.dispose();
+    this.musicManager.dispose();
 
     // Dispose renderer
     this.renderer.dispose();

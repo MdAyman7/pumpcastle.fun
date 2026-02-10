@@ -2,7 +2,6 @@
  * CreatureSystem.ts
  *
  * Manages creatures in the castle world:
- * - Dragons (legendary tokens)
  * - Zombies (dead/zombie state)
  * - Ghosts (cursed state)
  */
@@ -14,13 +13,6 @@ export class CreatureSystem {
   private creatures: CreatureState[] = [];
   private seed: number;
   private random: () => number;
-
-  // Dragon perching spots (for legendary tokens)
-  private readonly dragonSpots = [
-    { x: 400, y: 150, type: 'perch' as const },
-    { x: 250, y: 200, type: 'perch' as const },
-    { x: 550, y: 200, type: 'perch' as const },
-  ];
 
   // Zombie wander zone
   private readonly zombieZone = {
@@ -39,85 +31,11 @@ export class CreatureSystem {
    * Update creatures based on current state
    */
   update(state: RenderState, deltaTime: number): void {
-    // Manage dragons for legendary tokens
-    this.updateDragons(state, deltaTime);
-
     // Manage zombies for zombie state
     this.updateZombies(state, deltaTime);
 
     // Manage ghosts for cursed state
     this.updateGhosts(state, deltaTime);
-  }
-
-  /**
-   * Update dragon creatures
-   */
-  private updateDragons(state: RenderState, deltaTime: number): void {
-    const shouldHaveDragons = state.isLegendary && state.hasGraduated;
-    const dragonsAreStone = state.decay > 0.7;
-
-    // Get existing dragons
-    let dragons = this.creatures.filter(c => c.type === 'dragon');
-
-    if (shouldHaveDragons && dragons.length === 0) {
-      // Spawn dragons
-      for (let i = 0; i < 2; i++) {
-        const spot = this.dragonSpots[i];
-        this.creatures.push({
-          id: Date.now() + i,
-          type: 'dragon',
-          x: spot.x,
-          y: spot.y,
-          targetX: spot.x,
-          targetY: spot.y,
-          state: dragonsAreStone ? 'stone' : 'perched',
-          animationPhase: this.random() * Math.PI * 2,
-          opacity: 1
-        });
-      }
-    }
-
-    // Update dragon states
-    dragons = this.creatures.filter(c => c.type === 'dragon');
-    for (const dragon of dragons) {
-      // Update state based on decay
-      if (dragonsAreStone && dragon.state !== 'stone') {
-        dragon.state = 'stone';
-      } else if (!dragonsAreStone && dragon.state === 'stone') {
-        dragon.state = 'perched';
-      }
-
-      // Animate flying dragons
-      if (dragon.state === 'flying') {
-        dragon.animationPhase += deltaTime * 0.003;
-
-        // Move in patrol pattern
-        const speed = 40 * (deltaTime / 1000);
-        dragon.x += Math.sin(dragon.animationPhase * 0.5) * speed * 0.1;
-        dragon.y += Math.cos(dragon.animationPhase * 0.3) * speed * 0.05;
-
-        // Occasionally return to perch
-        if (this.random() < 0.002) {
-          const spot = this.dragonSpots[Math.floor(this.random() * this.dragonSpots.length)];
-          dragon.targetX = spot.x;
-          dragon.targetY = spot.y;
-          dragon.state = 'perched';
-        }
-      } else if (dragon.state === 'perched') {
-        // Gentle idle animation
-        dragon.animationPhase += deltaTime * 0.001;
-
-        // Occasionally fly
-        if (!dragonsAreStone && this.random() < 0.001) {
-          dragon.state = 'flying';
-        }
-      }
-    }
-
-    // Remove dragons if not legendary
-    if (!shouldHaveDragons) {
-      this.creatures = this.creatures.filter(c => c.type !== 'dragon');
-    }
   }
 
   /**

@@ -1,8 +1,15 @@
+// Exchange listing for a token
+export interface ExchangeListing {
+  name: string;           // Exchange name (e.g., "Raydium", "Jupiter", "Binance")
+  tier: 'dex' | 'cex_small' | 'cex_major';  // Exchange significance
+}
+
 // Token data from API
 export interface TokenData {
   address: string;
   name: string;
   symbol: string;
+  imageUrl?: string;       // Token logo/image URL (optional — used for banner cloth)
   marketCap: number;
   athMarketCap: number;
   priceChange24h: number;
@@ -14,6 +21,7 @@ export interface TokenData {
   createdAt: number;
   isGraduated: boolean;
   graduatedAt: number | null;
+  exchanges?: ExchangeListing[];  // Where this token is listed (optional)
 }
 
 // Castle tier based on ATH
@@ -58,6 +66,15 @@ export interface WorldState {
   marketCap: number;
   athMarketCap: number;
   priceChange24h: number;
+
+  // ─── Token Identity ──────────────────────────────────────
+  tokenName: string;                    // Castle canonical name
+  tokenSymbol: string;                  // Drives sigil colors deterministically
+  tokenImageUrl?: string;               // Banner cloth texture source
+  exchanges: ExchangeListing[];         // Trade route markers
+  exchangeCount: number;                // Total exchanges (drives trade atmosphere)
+  hasMajorExchange: boolean;            // Has at least one major CEX listing
+  priceMood: number;                    // -1 (bearish) to +1 (bullish), clamped and smoothed
 }
 
 // Interpolated state for smooth rendering
@@ -92,10 +109,10 @@ export interface BuilderState {
   scale: number;
 }
 
-// Creature state (dragons, zombies)
+// Creature state (zombies, ghosts)
 export interface CreatureState {
   id: number;
-  type: 'dragon' | 'zombie' | 'ghost';
+  type: 'zombie' | 'ghost';
   x: number;
   y: number;
   targetX: number;
@@ -126,6 +143,24 @@ export interface EnvironmentState {
   ambientLight: number;
   windStrength: number;
   timeOfDay: number; // 0-1
+}
+
+// Map region for world map view
+export interface MapRegion {
+  id: string;              // token address
+  name: string;
+  symbol: string;
+  tier: CastleTier;
+  phase: LifePhase;
+  isLegendary: boolean;
+  marketCap: number;
+  athMarketCap: number;
+  decay: number;
+  constructionProgress: number;
+  isZombie: boolean;
+  isCursed: boolean;
+  /** Computed importance score 0–1 (drives placement and size) */
+  importance: number;
 }
 
 // Canvas layer for rendering order

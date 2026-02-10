@@ -104,6 +104,17 @@ export function computeWorldState(
     ? 1
     : Math.min(1, tokenData.marketCap / TIER_THRESHOLDS.castle);
 
+  // ─── Identity & Mood ──────────────────────────────────────
+  const exchanges = tokenData.exchanges ?? [];
+  const hasMajorExchange = exchanges.some(e => e.tier === 'cex_major');
+
+  // Price mood: abstract ratio from -1 (very bearish) to +1 (very bullish).
+  // Maps priceChange24h into a clamped, gentle curve.
+  // ±5% → ±0.25, ±15% → ±0.5, ±30%+ → ±0.85 cap. Never hits ±1 to keep visual range.
+  const rawMood = Math.sign(tokenData.priceChange24h) *
+    Math.min(0.85, Math.abs(tokenData.priceChange24h) / 35);
+  const priceMood = Math.max(-1, Math.min(1, rawMood));
+
   return {
     tier,
     phase,
@@ -124,7 +135,16 @@ export function computeWorldState(
 
     marketCap: tokenData.marketCap,
     athMarketCap: tokenData.athMarketCap,
-    priceChange24h: tokenData.priceChange24h
+    priceChange24h: tokenData.priceChange24h,
+
+    // Identity
+    tokenName: tokenData.name,
+    tokenSymbol: tokenData.symbol,
+    tokenImageUrl: tokenData.imageUrl,
+    exchanges,
+    exchangeCount: exchanges.length,
+    hasMajorExchange,
+    priceMood
   };
 }
 

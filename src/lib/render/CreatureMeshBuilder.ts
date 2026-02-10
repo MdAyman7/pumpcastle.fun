@@ -7,7 +7,6 @@
  *   ↳ Behaviors: carry materials, hammer walls, climb scaffolding, gather at unfinished areas
  *   ↳ Graduation: celebrate → leave permanently (smooth walk-off, no pop)
  * - Villagers (merchants, guards, citizens)
- * - Dragons (legendary tokens)
  * - Zombies (dead/zombie state)
  * - Homeless (during decay)
  *
@@ -30,7 +29,7 @@ import { seededRandom } from '$lib/state/CastleState';
 
 type WorkerType = 'builder' | 'miner' | 'carpenter' | 'blacksmith';
 type VillagerType = 'merchant' | 'guard' | 'citizen';
-type CreatureType = WorkerType | VillagerType | 'dragon' | 'zombie' | 'homeless';
+type CreatureType = WorkerType | VillagerType | 'zombie' | 'homeless';
 
 // ─── Builder behavior states ────────────────────────────────
 
@@ -87,9 +86,6 @@ export class CreatureMeshBuilder {
     armor: THREE.MeshStandardMaterial;
     metal: THREE.MeshStandardMaterial;
     wood: THREE.MeshStandardMaterial;
-    dragonBody: THREE.MeshStandardMaterial;
-    dragonWing: THREE.MeshStandardMaterial;
-    dragonStone: THREE.MeshStandardMaterial;
     zombieSkin: THREE.MeshStandardMaterial;
     zombieClothes: THREE.MeshStandardMaterial;
     zombieEyes: THREE.MeshStandardMaterial;
@@ -133,13 +129,6 @@ export class CreatureMeshBuilder {
     new THREE.Vector3(0, 0, 5),
     new THREE.Vector3(-5, 0, 0),
     new THREE.Vector3(5, 0, 0)
-  ];
-
-  // Dragon perch positions
-  private dragonPerches = [
-    new THREE.Vector3(0, 12, 0),
-    new THREE.Vector3(-4, 10, -4),
-    new THREE.Vector3(4, 10, 4)
   ];
 
   // Worker types to spawn
@@ -220,21 +209,6 @@ export class CreatureMeshBuilder {
         color: 0x8b4513,
         roughness: 0.9
       }),
-      dragonBody: new THREE.MeshStandardMaterial({
-        color: 0x8b0000,
-        roughness: 0.6,
-        metalness: 0.2
-      }),
-      dragonWing: new THREE.MeshStandardMaterial({
-        color: 0x660000,
-        roughness: 0.7,
-        side: THREE.DoubleSide
-      }),
-      dragonStone: new THREE.MeshStandardMaterial({
-        color: 0x6a6a6a,
-        roughness: 0.9,
-        metalness: 0.1
-      }),
       zombieSkin: new THREE.MeshStandardMaterial({
         color: 0x8a9a8a,
         roughness: 0.9
@@ -271,7 +245,6 @@ export class CreatureMeshBuilder {
     this.templates.set('citizen', this.createCitizenMesh());
 
     // Special creatures
-    this.templates.set('dragon', this.createDragonMesh());
     this.templates.set('zombie', this.createZombieMesh());
     this.templates.set('homeless', this.createHomelessMesh());
   }
@@ -856,109 +829,6 @@ export class CreatureMeshBuilder {
     return group;
   }
 
-  private createDragonMesh(): THREE.Group {
-    const group = new THREE.Group();
-
-    const bodyGeom = new THREE.SphereGeometry(0.5, 12, 8);
-    bodyGeom.scale(1.5, 0.8, 1);
-    const body = new THREE.Mesh(bodyGeom, this.materials.dragonBody);
-    body.castShadow = true;
-    group.add(body);
-
-    const headGeom = new THREE.SphereGeometry(0.3, 8, 8);
-    headGeom.scale(1.2, 1, 1);
-    const head = new THREE.Mesh(headGeom, this.materials.dragonBody);
-    head.position.set(0.7, 0.1, 0);
-    head.castShadow = true;
-    group.add(head);
-
-    const snout = new THREE.Mesh(
-      new THREE.ConeGeometry(0.12, 0.4, 6),
-      this.materials.dragonBody
-    );
-    snout.position.set(1.1, 0.05, 0);
-    snout.rotation.z = -Math.PI / 2;
-    group.add(snout);
-
-    const eyeGeom = new THREE.SphereGeometry(0.06, 6, 6);
-    const eyeMat = new THREE.MeshStandardMaterial({
-      color: 0xffd700,
-      emissive: 0xffd700,
-      emissiveIntensity: 0.5
-    });
-
-    const leftEye = new THREE.Mesh(eyeGeom, eyeMat);
-    leftEye.position.set(0.85, 0.2, 0.2);
-    leftEye.name = 'eye';
-    group.add(leftEye);
-
-    const rightEye = new THREE.Mesh(eyeGeom, eyeMat);
-    rightEye.position.set(0.85, 0.2, -0.2);
-    rightEye.name = 'eye';
-    group.add(rightEye);
-
-    const wingShape = new THREE.Shape();
-    wingShape.moveTo(0, 0);
-    wingShape.lineTo(1.5, 0.8);
-    wingShape.lineTo(1.2, 0.2);
-    wingShape.lineTo(0.8, 0.3);
-    wingShape.lineTo(0.4, 0);
-    wingShape.lineTo(0, 0);
-
-    const wingGeom = new THREE.ShapeGeometry(wingShape);
-
-    const leftWing = new THREE.Mesh(wingGeom, this.materials.dragonWing);
-    leftWing.position.set(-0.2, 0.3, 0.3);
-    leftWing.rotation.set(0.3, 0, 0.5);
-    leftWing.name = 'leftWing';
-    group.add(leftWing);
-
-    const rightWing = new THREE.Mesh(wingGeom, this.materials.dragonWing);
-    rightWing.position.set(-0.2, 0.3, -0.3);
-    rightWing.rotation.set(-0.3, 0, 0.5);
-    rightWing.scale.z = -1;
-    rightWing.name = 'rightWing';
-    group.add(rightWing);
-
-    const tailCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-0.6, 0, 0),
-      new THREE.Vector3(-1.2, -0.1, 0),
-      new THREE.Vector3(-1.8, 0.1, 0),
-      new THREE.Vector3(-2.2, 0.3, 0)
-    ]);
-    const tailGeom = new THREE.TubeGeometry(tailCurve, 12, 0.1, 6, false);
-    const tail = new THREE.Mesh(tailGeom, this.materials.dragonBody);
-    group.add(tail);
-
-    const spike = new THREE.Mesh(
-      new THREE.ConeGeometry(0.15, 0.3, 4),
-      this.materials.dragonBody
-    );
-    spike.position.set(-2.3, 0.35, 0);
-    spike.rotation.z = Math.PI / 4;
-    group.add(spike);
-
-    const legGeom = new THREE.CylinderGeometry(0.08, 0.06, 0.4, 6);
-
-    const frontLeftLeg = new THREE.Mesh(legGeom, this.materials.dragonBody);
-    frontLeftLeg.position.set(0.3, -0.35, 0.35);
-    group.add(frontLeftLeg);
-
-    const frontRightLeg = new THREE.Mesh(legGeom, this.materials.dragonBody);
-    frontRightLeg.position.set(0.3, -0.35, -0.35);
-    group.add(frontRightLeg);
-
-    const backLeftLeg = new THREE.Mesh(legGeom, this.materials.dragonBody);
-    backLeftLeg.position.set(-0.4, -0.35, 0.35);
-    group.add(backLeftLeg);
-
-    const backRightLeg = new THREE.Mesh(legGeom, this.materials.dragonBody);
-    backRightLeg.position.set(-0.4, -0.35, -0.35);
-    group.add(backRightLeg);
-
-    return group;
-  }
-
   private createZombieMesh(): THREE.Group {
     const group = new THREE.Group();
 
@@ -1028,7 +898,6 @@ export class CreatureMeshBuilder {
     this.updateWorkers(state);
     this.updateVillagers(state);
     this.updateHomeless(state);
-    this.updateDragons(state);
     this.updateZombies(state);
     this.animateCreatures(state);
   }
@@ -1358,7 +1227,7 @@ export class CreatureMeshBuilder {
   }
 
   // ════════════════════════════════════════════════════════════
-  // VILLAGERS, HOMELESS, DRAGONS, ZOMBIES — unchanged logic
+  // VILLAGERS, HOMELESS, ZOMBIES — unchanged logic
   // ════════════════════════════════════════════════════════════
 
   private updateVillagers(state: RenderState): void {
@@ -1430,48 +1299,6 @@ export class CreatureMeshBuilder {
     }
   }
 
-  private updateDragons(state: RenderState): void {
-    const shouldHaveDragons = state.isLegendary && state.hasGraduated;
-    const targetCount = shouldHaveDragons ? 2 : 0;
-
-    const currentDragons = this.creatures.filter(c => c.type === 'dragon');
-
-    while (currentDragons.length < targetCount) {
-      const perch = this.dragonPerches[currentDragons.length % this.dragonPerches.length];
-      const creature = this.spawnCreature('dragon', perch.clone());
-      creature.state = state.smoothDecay > 0.7 ? 'stone' : 'perched';
-      currentDragons.push(creature);
-    }
-
-    while (currentDragons.length > targetCount) {
-      const dragon = currentDragons.pop()!;
-      this.removeCreature(dragon);
-    }
-
-    for (const dragon of currentDragons) {
-      dragon.state = state.smoothDecay > 0.7 ? 'stone' : 'perched';
-      this.updateDragonAppearance(dragon, state);
-    }
-  }
-
-  private updateDragonAppearance(dragon: CreatureInstance, state: RenderState): void {
-    const isStone = state.smoothDecay > 0.7;
-
-    dragon.mesh.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        if (child.material === this.materials.dragonBody ||
-          child.material === this.materials.dragonWing) {
-          child.material = isStone
-            ? this.materials.dragonStone
-            : (child.name.includes('wing') ? this.materials.dragonWing : this.materials.dragonBody);
-        }
-
-        if (child.name === 'eye' && child.material instanceof THREE.MeshStandardMaterial) {
-          child.material.emissiveIntensity = isStone ? 0 : 0.5;
-        }
-      }
-    });
-  }
 
   private updateZombies(state: RenderState): void {
     const shouldHaveZombies = state.isZombie && state.hasGraduated;
@@ -1503,7 +1330,7 @@ export class CreatureMeshBuilder {
     const mesh = template.clone();
     mesh.position.copy(position);
 
-    const scale = type === 'dragon' ? 1.5 : 1;
+    const scale = 1;
     mesh.scale.setScalar(scale);
 
     this.creaturesGroup.add(mesh);
@@ -1568,9 +1395,6 @@ export class CreatureMeshBuilder {
           break;
         case 'homeless':
           this.animateHomeless(creature, state, dt);
-          break;
-        case 'dragon':
-          this.animateDragon(creature, state, dt);
           break;
         case 'zombie':
           this.animateZombie(creature, state, dt);
@@ -1943,48 +1767,6 @@ export class CreatureMeshBuilder {
     }
 
     creature.mesh.rotation.z = Math.sin(creature.animationPhase * 0.3) * 0.05;
-  }
-
-  // ─── Dragon animation ─────────────────────────────────────
-
-  private animateDragon(creature: CreatureInstance, state: RenderState, dt: number): void {
-    if (creature.state === 'stone') return;
-
-    const flapSpeed = creature.state === 'flying' ? 8 : 2;
-    const flapAmount = creature.state === 'flying' ? 0.8 : 0.2;
-
-    creature.mesh.traverse((child) => {
-      if (child.name === 'leftWing') {
-        child.rotation.z = 0.5 + Math.sin(creature.animationPhase * flapSpeed) * flapAmount;
-      }
-      if (child.name === 'rightWing') {
-        child.rotation.z = 0.5 + Math.sin(creature.animationPhase * flapSpeed) * flapAmount;
-      }
-    });
-
-    const breathe = 1 + Math.sin(creature.animationPhase) * 0.02;
-    creature.mesh.scale.setScalar(creature.scale * breathe);
-
-    if (creature.state === 'flying') {
-      creature.position.x += Math.sin(creature.animationPhase * 0.5) * 0.02;
-      creature.position.y += Math.sin(creature.animationPhase * 0.3) * 0.01;
-      creature.position.z += Math.cos(creature.animationPhase * 0.4) * 0.02;
-
-      if (this.random() < 0.002) {
-        creature.state = 'perched';
-        creature.targetPosition.copy(
-          this.dragonPerches[Math.floor(this.random() * this.dragonPerches.length)]
-        );
-      }
-    } else {
-      if (this.random() < 0.001 && state.smoothDecay < 0.5) {
-        creature.state = 'flying';
-      }
-
-      creature.position.y = creature.targetPosition.y + Math.sin(creature.animationPhase * 0.5) * 0.1;
-    }
-
-    creature.mesh.rotation.y = Math.sin(creature.animationPhase * 0.2) * 0.1;
   }
 
   // ─── Zombie animation ─────────────────────────────────────

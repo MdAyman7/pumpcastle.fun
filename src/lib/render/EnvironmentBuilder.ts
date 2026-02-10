@@ -9,7 +9,7 @@
  */
 
 import * as THREE from 'three';
-import type { RenderState } from '$lib/types';
+import type { RenderState, CastleTier } from '$lib/types';
 import type { WeatherRenderState } from '$lib/state/WeatherState';
 import { qualitySettings } from './QualitySettings';
 
@@ -218,11 +218,106 @@ export class EnvironmentBuilder {
   }
 
   /**
+   * Check if a tree position conflicts with a road or entrance for a given tier.
+   * Returns true if the position is too close to a road/entrance and should be excluded.
+   */
+  private isOnRoad(x: number, z: number, wallRadius: number, isLegendary?: boolean): boolean {
+    // Castle entrance zone (broader exclusion near gate)
+    if (Math.abs(x) < 4 && z > 0 && z < wallRadius + 8) return true;
+
+    // ─── Legendary / Citadel: spline roads + plazas ──────────
+    if (isLegendary) {
+      const RING_R = wallRadius + 6;
+      const distFromCenter = Math.sqrt(x * x + z * z);
+
+      // Inner ceremonial zone — no trees within ring + very generous margin.
+      // This creates the calm, powerful, intentional open space around the castle.
+      // Radius 26 clears all inner trees and near-ring edge cases.
+      if (distFromCenter < RING_R + 6) return true;
+
+      // Forward approach cone — the +Z direction (main avenue / entrance) should
+      // be completely clear of trees out to a significant distance.
+      // Any tree with z > 0 and within ±30° of the main axis gets excluded.
+      if (z > 0 && Math.abs(x) < z * 0.65 && distFromCenter < 38) return true;
+
+      // Main avenue: X ≈ 0, from gate to end (+Z) — wide clearance
+      if (Math.abs(x) < 5 && z > wallRadius - 2) return true;
+
+      // Ring boulevard (wider exclusion for legendary smooth ring)
+      if (Math.abs(distFromCenter - RING_R) < 3.5) return true;
+
+      // Promenades: ±X curves from ring outward and backward (−Z direction)
+      for (const side of [-1, 1]) {
+        if (side > 0 && x > RING_R - 3 && x < RING_R + 16 && z > -9 && z < 3) return true;
+        if (side < 0 && x < -RING_R + 3 && x > -RING_R - 16 && z > -9 && z < 3) return true;
+      }
+
+      // Rear processional path (−Z)
+      if (Math.abs(x) < 3 && z < -RING_R + 2 && z > -RING_R - 14) return true;
+
+      // ─── Plaza exclusion zones ────────────────────────────
+      // Grand entrance plaza at (0, RING_R), radius 6 + generous margin
+      const dxGrand = x;
+      const dzGrand = z - RING_R;
+      if (dxGrand * dxGrand + dzGrand * dzGrand < 9.5 * 9.5) return true;
+
+      // Outer waypoint plaza at (0, RING_R+10), radius 3.5 + margin
+      const dzWaypoint = z - (RING_R + 10);
+      if (x * x + dzWaypoint * dzWaypoint < 6.5 * 6.5) return true;
+
+      // Ring crossroad plazas at (±RING_R, 0), radius 2.8 + margin
+      for (const side of [-1, 1]) {
+        const dxRing = x - side * RING_R;
+        if (dxRing * dxRing + z * z < 5.5 * 5.5) return true;
+      }
+
+      return false;
+    }
+
+    // ─── Standard tiers: original road layout ────────────────
+    // Main road: X ≈ 0, Z > wallRadius (extends outward from gate)
+    if (Math.abs(x) < 3 && z > wallRadius - 2) return true;
+
+    // Side paths at ±45° and ±135° angles
+    const sideAngles = [Math.PI / 4, -Math.PI / 4, Math.PI * 3 / 4, -Math.PI * 3 / 4];
+    for (const angle of sideAngles) {
+      const dirX = Math.sin(angle);
+      const dirZ = Math.cos(angle);
+      // Project point onto path direction line
+      const dot = x * dirX + z * dirZ;
+      if (dot > wallRadius - 1) {
+        // Distance from point to path center line
+        const perpDist = Math.abs(x * dirZ - z * dirX);
+        if (perpDist < 2.5) return true;
+      }
+    }
+
+    // Ring path at wallRadius + 5
+    const ringRadius = wallRadius + 5;
+    const distFromCenter = Math.sqrt(x * x + z * z);
+    if (Math.abs(distFromCenter - ringRadius) < 2) return true;
+
+    return false;
+  }
+
+  /**
    * Add trees around the castle.
    * OPTIMIZED: uses shared geometries and material pool.
    * Tree count scaled by quality setting.
+   * When tier/legendary info is provided, excludes trees from roads and ceremonial zones.
    */
-  private addTrees(): void {
+  addTrees(tier?: CastleTier, isLegendary?: boolean): void {
+    // Flatten terrain under legendary roads/plazas so green doesn't bleed through
+    if (isLegendary) {
+      this.flattenTerrainForLegendary();
+    }
+
+    // Clear existing trees first
+    for (const tree of this.trees) {
+      this.environmentGroup.remove(tree);
+    }
+    this.trees = [];
+
     const allTreePositions = [
       // Inner ring (always rendered, even on LOW)
       { x: -12, z: 8 },
@@ -261,15 +356,98 @@ export class EnvironmentBuilder {
 
     // Quality-aware tree count
     const maxTrees = qualitySettings.getConfig().treeCount;
-    const treePositions = allTreePositions.slice(0, maxTrees);
+    let treePositions = allTreePositions.slice(0, maxTrees);
+
+    // Exclude trees on roads/entrances/ceremonial zones for graduated castles
+    if (tier) {
+      const wallRadius = this.getWallRadius(tier);
+      treePositions = treePositions.filter(pos => !this.isOnRoad(pos.x, pos.z, wallRadius, isLegendary));
+    }
 
     for (const pos of treePositions) {
       const tree = this.createTree();
       tree.position.set(pos.x, 0, pos.z);
-      tree.scale.setScalar(0.8 + Math.random() * 0.4);
+      // Legendary: surviving trees are further out — make them taller and more
+      // stately to feel like curated background scenery, not random clutter.
+      if (isLegendary) {
+        tree.scale.setScalar(1.1 + Math.random() * 0.5);
+      } else {
+        tree.scale.setScalar(0.8 + Math.random() * 0.4);
+      }
       tree.rotation.y = Math.random() * Math.PI * 2;
       this.environmentGroup.add(tree);
       this.trees.push(tree);
+    }
+  }
+
+  /**
+   * Flatten terrain vertices under all legendary roads, plazas, and ceremonial zones.
+   * Without this, the terrain's gentle hills (±0.5 height) poke through the road/plaza
+   * surfaces which sit at y ≈ 0.05. Called once when legendary state is first detected.
+   */
+  private flattenTerrainForLegendary(): void {
+    if (!this.groundMesh) return;
+
+    const geom = this.groundMesh.geometry;
+    const positions = geom.attributes.position;
+    const wallRadius = 14; // citadel
+    const RING_R = wallRadius + 6; // = 20
+
+    for (let i = 0; i < positions.count; i++) {
+      const x = positions.getX(i);
+      const z = positions.getY(i); // Y in plane space = Z in world
+      const dist = Math.sqrt(x * x + z * z);
+
+      let flatten = false;
+
+      // Inner ceremonial zone (everything within ring + generous margin)
+      if (dist < RING_R + 8) flatten = true;
+
+      // Main avenue corridor: wide clearance along +Z from ring outward
+      if (Math.abs(x) < 6 && z > wallRadius) flatten = true;
+
+      // Forward approach cone: broad clearance in front of castle
+      if (z > 0 && Math.abs(x) < z * 0.7 && dist < 45) flatten = true;
+
+      // Grand entrance plaza at (0, RING_R), radius 6 + margin
+      const dzGrand = z - RING_R;
+      if (x * x + dzGrand * dzGrand < 9 * 9) flatten = true;
+
+      // Outer waypoint plaza at (0, RING_R+10), radius 3.5 + margin
+      const dzWay = z - (RING_R + 10);
+      if (x * x + dzWay * dzWay < 6 * 6) flatten = true;
+
+      // Ring crossroad plazas at (±RING_R, 0), radius 2.8 + margin
+      for (const side of [-1, 1]) {
+        const dxR = x - side * RING_R;
+        if (dxR * dxR + z * z < 5.5 * 5.5) flatten = true;
+      }
+
+      // Promenades: backward-curving corridors from ±X ring positions
+      for (const side of [-1, 1]) {
+        if (side > 0 && x > RING_R - 4 && x < RING_R + 18 && z > -12 && z < 4) flatten = true;
+        if (side < 0 && x < -RING_R + 4 && x > -RING_R - 18 && z > -12 && z < 4) flatten = true;
+      }
+
+      // Rear processional path
+      if (Math.abs(x) < 4 && z < -RING_R + 3 && z > -RING_R - 15) flatten = true;
+
+      if (flatten) {
+        // Set height to zero (plane Z = world Y height)
+        positions.setZ(i, 0);
+      }
+    }
+
+    positions.needsUpdate = true;
+    geom.computeVertexNormals();
+  }
+
+  private getWallRadius(tier: CastleTier): number {
+    switch (tier) {
+      case 'keep': return 4;
+      case 'castle': return 7;
+      case 'fortress': return 10;
+      case 'citadel': return 14;
     }
   }
 

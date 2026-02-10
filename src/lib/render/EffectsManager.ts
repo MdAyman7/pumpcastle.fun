@@ -32,8 +32,9 @@ export class EffectsManager {
   private particleMaterial: THREE.PointsMaterial;
   private particleSystem: THREE.Points;
 
-  // Max particles
-  private readonly MAX_PARTICLES = 500;
+  // Max particles — reduced from 500. Celebration + legendary sparks + dust/embers
+  // rarely exceed 150 even at peak. Lower cap means less buffer iteration per frame.
+  private readonly MAX_PARTICLES = 200;
 
   // Confetti colors
   private confettiColors = [
@@ -107,9 +108,10 @@ export class EffectsManager {
    * Spawn particles based on state
    */
   private spawnParticles(state: RenderState, dt: number): void {
-    // Celebration confetti
+    // Celebration confetti — 12/sec (reduced from 30). Combined with EventSystem
+    // fireworks, this is plenty of visual celebratory density without excess.
     if (state.showGraduationCelebration) {
-      const spawnRate = 30 * dt;
+      const spawnRate = 12 * dt;
       for (let i = 0; i < spawnRate; i++) {
         this.spawnConfetti();
       }
@@ -333,13 +335,12 @@ export class EffectsManager {
   private startCelebration(): void {
     this.celebrationActive = true;
 
-    // Burst of confetti
-    for (let i = 0; i < 50; i++) {
+    // Initial burst — reduced from 50+30. EventSystem adds its own fireworks
+    // on the same frame, so this only needs to seed the continuous stream.
+    for (let i = 0; i < 20; i++) {
       this.spawnConfetti();
     }
-
-    // Burst of sparks
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 10; i++) {
       this.spawnSpark();
     }
   }

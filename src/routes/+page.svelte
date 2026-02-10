@@ -11,9 +11,21 @@
     loadToken,
     resetStore
   } from '$lib/stores/tokenStore';
+  import {
+    mapRegions,
+    mapLoading,
+    loadAllTokens,
+    startMapPolling,
+    stopMapPolling,
+    addTokenToMap
+  } from '$lib/stores/mapStore';
+  import WorldMap from '$lib/components/WorldMap.svelte';
   import type { WorldState } from '$lib/types';
   import type { WeatherRenderState } from '$lib/state/WeatherState';
   import type { TimeInfo } from '$lib/state/TimeState';
+  import { getAudioCueSystem } from '$lib/audio/AudioCueSystem';
+  import { VisualCueFallback, VISUAL_CUE_STYLES } from '$lib/audio/VisualCueFallback';
+  import { getMusicManager } from '$lib/audio/MusicManager';
 
   let containerEl: HTMLElement;
   let renderer: WorldRenderer3D | null = null;
@@ -26,16 +38,53 @@
   let weatherInterval: ReturnType<typeof setInterval> | null = null;
   let qualityLevel: string = 'medium';
 
-  const presets = [
-    { label: 'Construction', address: 'pregrad123456789012345678901234567890123456', icon: '🏗' },
-    { label: 'Graduated', address: 'justgrad12345678901234567890123456789012345', icon: '🎓' },
-    { label: 'Thriving', address: 'thriving1234567890123456789012345678901234', icon: '🏰' },
-    { label: 'Decaying', address: 'decayed12345678901234567890123456789012345', icon: '💀' },
-    { label: 'Zombie', address: 'zombie123456789012345678901234567890123456', icon: '🧟' },
-    { label: 'Legendary', address: 'legend123456789012345678901234567890123456', icon: '🐉' },
-    { label: 'Cursed', address: 'cursed123456789012345678901234567890123456', icon: '👻' },
-    { label: 'Fallen', address: 'fallen123456789012345678901234567890123456', icon: '⚔️' }
-  ];
+  // View mode: 'map' shows the kingdom overview, 'castle' shows the 3D scene
+  let viewMode: 'map' | 'castle' = 'map';
+  let rendererMounted = false;
+
+  // Transition state
+  let transitioning = false;
+  let mapZoomTargetId: string | null = null;
+  let mapFading = false;
+  let viewportFadingIn = false;
+  let viewportFadingOut = false;
+  let sceneFogActive = false; // cinematic fog mask while scene warms up
+
+  // Loader overlay state (map → castle transition)
+  let loaderActive = false;
+  let loaderRevealing = false; // zoom-reveal phase after scene ready
+  let loaderTokenName = '';
+  let loaderTokenSymbol = '';
+  let loaderTokenTier = '';
+
+  // Audio & visual cues
+  const audioCues = getAudioCueSystem();
+  const visualCues = new VisualCueFallback();
+  let soundEnabled = audioCues.enabled;
+  let visualCueContainer: HTMLElement;
+
+  // Background music
+  const music = getMusicManager();
+  let musicEnabled = music.enabled;
+  let musicVolume = music.volume;
+
+  // Tier icons for map region display
+  function getTierIcon(tier: string, phase: string): string {
+    if (phase === 'zombie') return '🧟';
+    if (phase === 'cursed') return '👻';
+    if (phase === 'construction') return '🏗';
+    const icons: Record<string, string> = {
+      citadel: '🏰', fortress: '🏰', castle: '🏯', keep: '⛫'
+    };
+    return icons[tier] || '⛫';
+  }
+
+  // Dynamically derive presets from map regions
+  $: presets = $mapRegions.map(r => ({
+    label: r.symbol || r.name.slice(0, 8),
+    address: r.id,
+    icon: getTierIcon(r.tier, r.phase)
+  }));
 
   function formatNumber(num: number): string {
     if (num >= 1_000_000_000) return (num / 1_000_000_000).toFixed(2) + 'B';
@@ -71,15 +120,33 @@
   }
 
   async function handleSubmit() {
-    if (inputAddress.trim()) {
-      await loadToken(inputAddress.trim());
-      searchFocused = false;
+    const addr = inputAddress.trim();
+    if (!addr) return;
+
+    searchFocused = false;
+
+    if (viewMode === 'map') {
+      // Add token to map and navigate to it
+      await addTokenToMap(addr);
+      handleRegionClick(addr);
+    } else {
+      // In castle view, load directly
+      await addTokenToMap(addr);
+      await loadToken(addr);
+      if (renderer) renderer.resume();
     }
   }
 
   async function handlePreset(address: string) {
     inputAddress = address;
+    if (viewMode === 'map') {
+      handleRegionClick(address);
+      return;
+    }
     await loadToken(address);
+    if (renderer) {
+      renderer.resume();
+    }
   }
 
   function handleResize() {
@@ -101,9 +168,123 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
+      if (transitioning) return;
       if (drawerOpen) drawerOpen = false;
-      if (searchFocused) searchFocused = false;
+      else if (searchFocused) searchFocused = false;
+      else if (viewMode === 'castle') goToMap();
     }
+  }
+
+  /** Wait for the renderer to report scene readiness (meshes built, camera settled) */
+  function waitForSceneReady(timeout: number = 2000): Promise<void> {
+    return new Promise(resolve => {
+      const start = performance.now();
+      function poll() {
+        if (renderer?.isSceneReady() || performance.now() - start > timeout) {
+          resolve();
+        } else {
+          requestAnimationFrame(poll);
+        }
+      }
+      poll();
+    });
+  }
+
+  /** Switch from map to castle view with loader + cinematic reveal */
+  async function handleRegionClick(address: string) {
+    if (transitioning) return;
+    transitioning = true;
+
+    // Audio + visual cue: zoom-in whoosh
+    audioCues.play('map_to_castle');
+    visualCues.fire('zoom_in_pulse');
+
+    // Grab region info for the loader label
+    const region = $mapRegions.find(r => r.id === address);
+    loaderTokenName = region?.name || '';
+    loaderTokenSymbol = region?.symbol || '';
+    loaderTokenTier = region?.tier || '';
+
+    // Start loading token data immediately (parallel with map zoom)
+    const tokenPromise = loadToken(address);
+
+    // Phase 1: Zoom the map toward the clicked region (CSS transition ~900ms)
+    mapZoomTargetId = address;
+
+    // Let the full map zoom + fade-out play through
+    await Promise.all([
+      tokenPromise,
+      new Promise(r => setTimeout(r, 900)),
+    ]);
+
+    // Phase 2: Map is now gone — show the loader
+    loaderActive = true;
+
+    // Swap to castle view behind the loader (invisible to user)
+    sceneFogActive = true;
+    if (renderer) renderer.resume();
+    viewMode = 'castle';
+
+    // Phase 3: Wait for scene to actually be ready (meshes built, camera settled)
+    await waitForSceneReady();
+
+    // Small extra buffer so the first rendered frames stabilize
+    await new Promise(r => setTimeout(r, 300));
+
+    // Phase 4: Cinematic reveal — loader fades out, viewport zooms in with brightness flash
+    loaderRevealing = true;
+    sceneFogActive = false;
+
+    // Let the reveal animation play (~900ms)
+    await new Promise(r => setTimeout(r, 900));
+
+    // Clean up
+    loaderActive = false;
+    loaderRevealing = false;
+    mapZoomTargetId = null;
+    transitioning = false;
+  }
+
+  /** Return to the world map with reverse zoom-out transition */
+  async function goToMap() {
+    if (transitioning) return;
+    transitioning = true;
+    drawerOpen = false;
+
+    // Audio + visual cue: zoom-out whoosh
+    audioCues.play('castle_to_map');
+    visualCues.fire('zoom_out_pulse');
+
+    // Phase 1: Fade out the 3D viewport into fog
+    viewportFadingOut = true;
+    await new Promise(r => setTimeout(r, 400));
+
+    // Phase 2: Switch to map view behind the fading viewport
+    if (renderer) renderer.pause();
+    music.setMood('idle');
+    viewportFadingOut = false;
+    sceneFogActive = false;
+
+    // Set map to zoomed-in state of the current token, then zoom out
+    mapZoomTargetId = $tokenAddress;
+    mapFading = false;
+    viewMode = 'map';
+
+    // After one frame to apply the zoomed transform, remove it to trigger zoom-out
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    mapZoomTargetId = null;
+
+    await new Promise(r => setTimeout(r, 900));
+    transitioning = false;
+  }
+
+  /** Enter castle view (from top bar, uses currently selected token) */
+  function goToCastle() {
+    if (!$tokenData) {
+      handleRegionClick(presets[0].address);
+      return;
+    }
+    handleRegionClick($tokenData.address);
   }
 
   function getTimeIcon(period: string): string {
@@ -140,14 +321,34 @@
     return labels[condition] || 'Fair';
   }
 
-  onMount(() => {
+  function toggleSound() {
+    soundEnabled = !soundEnabled;
+    audioCues.setEnabled(soundEnabled);
+  }
+
+  function toggleMusic() {
+    musicEnabled = !musicEnabled;
+    music.setEnabled(musicEnabled);
+  }
+
+  function setMusicVolume(e: Event) {
+    const val = parseFloat((e.target as HTMLInputElement).value);
+    musicVolume = val;
+    music.setVolume(val);
+  }
+
+  function mountRenderer() {
+    if (rendererMounted || !containerEl) return;
     renderer = new WorldRenderer3D(containerEl);
     renderer.resize(window.innerWidth, window.innerHeight);
     renderer.start();
     qualityLevel = renderer.getQualityLevel();
-    window.addEventListener('resize', handleResize);
-    window.addEventListener('keydown', handleKeydown);
-    handlePreset(presets[0].address);
+    rendererMounted = true;
+
+    // Start paused if we're on the map view
+    if (viewMode === 'map') {
+      renderer.pause();
+    }
 
     // Poll weather + time state from renderer every 2s for UI display
     weatherInterval = setInterval(() => {
@@ -156,16 +357,37 @@
         timeInfo = renderer.getTimeInfo();
       }
     }, 2000);
-    // Initial time info immediately
     if (renderer) {
       timeInfo = renderer.getTimeInfo();
     }
+  }
+
+  onMount(() => {
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('keydown', handleKeydown);
+
+    // Attach visual cue overlay container
+    if (visualCueContainer) {
+      visualCues.attach(visualCueContainer);
+    }
+
+    // Load all tokens for the map view
+    loadAllTokens().then(() => {
+      startMapPolling();
+    });
+
+    // Mount the 3D renderer (it starts paused on map view)
+    mountRenderer();
   });
 
   onDestroy(() => {
     if (browser) {
       renderer?.destroy();
       resetStore();
+      stopMapPolling();
+      audioCues.dispose();
+      visualCues.dispose();
+      music.dispose();
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('keydown', handleKeydown);
       if (weatherInterval) clearInterval(weatherInterval);
@@ -182,14 +404,81 @@
   <meta name="description" content="Visualize crypto tokens as living 3D castles" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  {@html `<style>${VISUAL_CUE_STYLES}</style>`}
 </svelte:head>
 
-<!-- Fullscreen 3D canvas -->
-<div class="viewport" bind:this={containerEl}></div>
+<!-- World map view (stays in DOM during zoom-out transition) -->
+{#if viewMode === 'map' || transitioning}
+  <WorldMap
+    regions={$mapRegions}
+    selectedId={$tokenAddress}
+    onRegionClick={handleRegionClick}
+    zoomTargetId={mapZoomTargetId}
+    fading={mapFading}
+  />
+{/if}
 
-<!-- Top bar: logo + search -->
-<div class="top-bar">
+<!-- Fullscreen 3D canvas (always in DOM, hidden when map is shown) -->
+<div
+  class="viewport"
+  class:hidden={viewMode === 'map' && !transitioning}
+  class:viewport-fade-in={viewportFadingIn}
+  class:viewport-fade-out={viewportFadingOut}
+  class:viewport-reveal={loaderRevealing}
+  bind:this={containerEl}
+></div>
+
+<!-- Cinematic fog mask: hides incomplete frames during scene warm-up -->
+<div class="scene-fog" class:active={sceneFogActive}></div>
+
+<!-- Castle loader overlay: shown during map→castle transition while scene builds -->
+{#if loaderActive}
+  <div class="castle-loader" class:revealing={loaderRevealing}>
+    <div class="castle-loader-content">
+      <div class="castle-loader-icon">
+        {#if loaderTokenTier === 'citadel'}
+          <svg viewBox="0 0 40 40" width="48" height="48" fill="currentColor" opacity="0.5">
+            <path d="M20 2l4 8h-2v6h4v-4h2v4h4v-6h-2l4-8v30H8V2l4 8h-2v6h4v-4h2v4h4v-6h-2l4-8z"/>
+          </svg>
+        {:else if loaderTokenTier === 'fortress'}
+          <svg viewBox="0 0 40 40" width="44" height="44" fill="currentColor" opacity="0.5">
+            <path d="M6 12l4-8v28H6V12zm24-8l4 8v20h-4V4zM14 8l2-4 2 4v24h-4V8zm6-4l2 4v24h-4V8l2-4z"/>
+          </svg>
+        {:else}
+          <svg viewBox="0 0 40 40" width="40" height="40" fill="currentColor" opacity="0.5">
+            <path d="M12 10l4-6 4 6v22H12V10zm8-6l4 6v22h-8V10l4-6z"/>
+          </svg>
+        {/if}
+      </div>
+      <div class="castle-loader-spinner">
+        <div class="spinner-ring"></div>
+      </div>
+      {#if loaderTokenName}
+        <p class="castle-loader-name">{loaderTokenName}</p>
+      {/if}
+      {#if loaderTokenSymbol}
+        <p class="castle-loader-symbol">${loaderTokenSymbol}</p>
+      {/if}
+      <p class="castle-loader-hint">Forging the realm...</p>
+    </div>
+  </div>
+{/if}
+
+<!-- Visual cue overlay container (audio fallback pulses) -->
+<div bind:this={visualCueContainer} class="visual-cue-layer"></div>
+
+<!-- Top bar: logo + view toggle + search -->
+<div class="top-bar" class:map-mode={viewMode === 'map' && !transitioning}>
+  <!-- Back button in castle mode -->
+  {#if viewMode === 'castle'}
+    <button class="back-btn" on:click={goToMap} title="Back to World Map" disabled={transitioning}>
+      <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+        <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+      </svg>
+    </button>
+  {/if}
+
   <div class="logo">
     <span class="logo-icon">🏰</span>
     <span class="logo-text">Pumpcastle</span>
@@ -229,8 +518,8 @@
     {/if}
   </div>
 
-  <!-- World HUD: unified time + weather -->
-  {#if timeInfo || weatherInfo}
+  <!-- World HUD: unified time + weather (castle mode only) -->
+  {#if viewMode === 'castle' && (timeInfo || weatherInfo)}
     <div
       class="world-hud"
       class:legendary={$worldState?.isLegendary}
@@ -256,7 +545,8 @@
   {/if}
 </div>
 
-<!-- Preset buttons strip (top-right, always visible) -->
+<!-- Preset buttons strip (top-right, castle view only) -->
+{#if viewMode === 'castle'}
 <div class="presets-strip">
   {#each presets as preset}
     <button
@@ -270,9 +560,10 @@
     </button>
   {/each}
 </div>
+{/if}
 
-<!-- Bottom-left: state badges -->
-{#if $worldState}
+<!-- Bottom-left: state badges (castle view only) -->
+{#if viewMode === 'castle' && $worldState}
   <div class="status-strip">
     <div class="phase-pill" style="--phase-color: {getPhaseColor($worldState)}">
       {getPhaseName($worldState)}
@@ -286,8 +577,8 @@
   </div>
 {/if}
 
-<!-- Bottom-right: quick stats + drawer toggle -->
-{#if $tokenData && $worldState}
+<!-- Bottom-right: quick stats + drawer toggle (castle view only) -->
+{#if viewMode === 'castle' && $tokenData && $worldState}
   <div class="stats-bar">
     <div class="stat">
       <span class="stat-val">${formatNumber($tokenData.marketCap)}</span>
@@ -319,7 +610,8 @@
   </div>
 {/if}
 
-<!-- Drawer -->
+<!-- Drawer (castle view only) -->
+{#if viewMode === 'castle'}
 <!-- svelte-ignore a11y-click-events-have-key-events -->
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 {#if drawerOpen}
@@ -465,6 +757,46 @@
         <p class="quality-hint">Auto-detected: {qualityLevel}. Change if the scene feels slow.</p>
       </div>
 
+      <div class="detail-section">
+        <h4>Sound</h4>
+        <div class="quality-buttons">
+          <button
+            class="quality-btn"
+            class:active={!soundEnabled}
+            on:click={() => { if (soundEnabled) toggleSound(); }}
+          >Off</button>
+          <button
+            class="quality-btn"
+            class:active={soundEnabled}
+            on:click={() => { if (!soundEnabled) toggleSound(); }}
+          >On</button>
+        </div>
+        <p class="quality-hint">Subtle audio cues for transitions and events. Default: off.</p>
+      </div>
+
+      <div class="detail-section">
+        <h4>Music</h4>
+        <div class="quality-buttons">
+          <button
+            class="quality-btn"
+            class:active={!musicEnabled}
+            on:click={() => { if (musicEnabled) toggleMusic(); }}
+          >Off</button>
+          <button
+            class="quality-btn"
+            class:active={musicEnabled}
+            on:click={() => { if (!musicEnabled) toggleMusic(); }}
+          >On</button>
+        </div>
+        {#if musicEnabled}
+          <div class="volume-slider">
+            <span class="volume-label">Volume</span>
+            <input type="range" min="0" max="0.4" step="0.01" value={musicVolume} on:input={setMusicVolume} />
+          </div>
+        {/if}
+        <p class="quality-hint">Ambient music that adapts to the castle state. Default: off.</p>
+      </div>
+
       <div class="detail-section hint-section">
         <p>Hold and drag on the scene to orbit the camera</p>
         <p>Weather is based on your location</p>
@@ -478,6 +810,53 @@
     </div>
   {/if}
 </div>
+{/if}
+
+<!-- Sound toggle (always visible, minimal) -->
+<button
+  class="sound-toggle"
+  on:click={toggleSound}
+  title={soundEnabled ? 'Sound: On' : 'Sound: Off'}
+  aria-label={soundEnabled ? 'Mute sound' : 'Unmute sound'}
+>
+  {#if soundEnabled}
+    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+      <path fill-rule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.617.766L4.716 13.5H2.5a1 1 0 01-1-1v-5a1 1 0 011-1h2.216l3.667-3.266a1 1 0 011-.158zM13.78 7.22a.75.75 0 011.06 0 5.5 5.5 0 010 7.78.75.75 0 01-1.06-1.06 4 4 0 000-5.66.75.75 0 010-1.06z" clip-rule="evenodd"/>
+    </svg>
+  {:else}
+    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+      <path fill-rule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.617.766L4.716 13.5H2.5a1 1 0 01-1-1v-5a1 1 0 011-1h2.216l3.667-3.266a1 1 0 011-.158z" clip-rule="evenodd"/>
+      <path d="M13 8l4 4M17 8l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+    </svg>
+  {/if}
+</button>
+
+<!-- Music toggle (always visible, minimal, next to sound toggle) -->
+<button
+  class="music-toggle"
+  on:click={toggleMusic}
+  title={musicEnabled ? 'Music: On' : 'Music: Off'}
+  aria-label={musicEnabled ? 'Stop music' : 'Play music'}
+>
+  {#if musicEnabled}
+    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+      <path d="M18 3.172a1 1 0 00-1.196-.98l-9 2A1 1 0 007 5.172V13a3 3 0 102 2.828V7.028l7-1.556V11a3 3 0 102 2.828V3.172z"/>
+    </svg>
+  {:else}
+    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+      <path d="M18 3.172a1 1 0 00-1.196-.98l-9 2A1 1 0 007 5.172V13a3 3 0 102 2.828V7.028l7-1.556V11a3 3 0 102 2.828V3.172z" opacity="0.4"/>
+      <path d="M3 8l14 6M17 8L3 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+    </svg>
+  {/if}
+</button>
+
+<!-- Map loading indicator -->
+{#if viewMode === 'map' && $mapLoading}
+  <div class="map-loading">
+    <div class="spinner"></div>
+    <span>Loading kingdoms...</span>
+  </div>
+{/if}
 
 <style>
   :global(*) { box-sizing: border-box; }
@@ -524,6 +903,31 @@
     gap: 12px;
     padding: 8px 12px;
     border-radius: 14px;
+    transition: background 0.4s, border-color 0.4s, backdrop-filter 0.4s;
+  }
+
+  /* Map mode: strip glass chrome, go fully transparent */
+  .top-bar.map-mode {
+    background: transparent;
+    border-color: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    padding: 10px 16px;
+  }
+  .top-bar.map-mode .logo {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .top-bar.map-mode .search-form {
+    background: rgba(10, 10, 14, 0.3);
+    border-color: rgba(255, 255, 255, 0.04);
+  }
+  .top-bar.map-mode .search-form:focus-within {
+    background: rgba(15, 15, 20, 0.7);
+    border-color: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
   }
 
   .logo {
@@ -1027,6 +1431,218 @@
     color: #52525b;
   }
 
+  /* ---- Hidden viewport (when map is active) ---- */
+  .viewport.hidden {
+    visibility: hidden;
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  /* ---- Viewport transition animations ---- */
+  .viewport-fade-in {
+    animation: viewportFadeIn 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  }
+
+  .viewport-fade-out {
+    animation: viewportFadeOut 0.4s ease forwards;
+  }
+
+  @keyframes viewportFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes viewportFadeOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+
+  /* ---- Viewport cinematic reveal (zoom-in + brightness flash) ---- */
+  .viewport-reveal {
+    animation: viewportReveal 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes viewportReveal {
+    0% {
+      opacity: 0;
+      transform: scale(1.12);
+      filter: brightness(1.8) saturate(0.5);
+    }
+    40% {
+      opacity: 1;
+      filter: brightness(1.4) saturate(0.8);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+      filter: brightness(1) saturate(1);
+    }
+  }
+
+  /* ---- Castle loader overlay ---- */
+  .castle-loader {
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(
+      ellipse at 50% 55%,
+      rgba(16, 14, 10, 0.92) 0%,
+      rgba(10, 9, 7, 0.97) 50%,
+      rgba(4, 4, 3, 1) 100%
+    );
+    animation: loaderFadeIn 0.35s ease forwards;
+  }
+
+  .castle-loader.revealing {
+    animation: loaderFadeOut 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    pointer-events: none;
+  }
+
+  @keyframes loaderFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes loaderFadeOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+
+  .castle-loader-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    text-align: center;
+  }
+
+  .castle-loader-icon {
+    color: #a89070;
+    animation: loaderIconPulse 2s ease-in-out infinite;
+  }
+
+  @keyframes loaderIconPulse {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.06); }
+  }
+
+  .castle-loader-spinner {
+    width: 32px;
+    height: 32px;
+    position: relative;
+  }
+
+  .spinner-ring {
+    width: 100%;
+    height: 100%;
+    border: 2px solid rgba(168, 144, 112, 0.15);
+    border-top-color: rgba(168, 144, 112, 0.6);
+    border-radius: 50%;
+    animation: loaderSpin 1s linear infinite;
+  }
+
+  @keyframes loaderSpin {
+    to { transform: rotate(360deg); }
+  }
+
+  .castle-loader-name {
+    margin: 0;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #d4c4a8;
+    letter-spacing: 0.02em;
+  }
+
+  .castle-loader-symbol {
+    margin: -10px 0 0;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #8a7a60;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .castle-loader-hint {
+    margin: 4px 0 0;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 0.68rem;
+    color: #52524a;
+    letter-spacing: 0.04em;
+    animation: loaderHintPulse 2.5s ease-in-out infinite;
+  }
+
+  @keyframes loaderHintPulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+  }
+
+  /* ---- Cinematic fog mask ---- */
+  .scene-fog {
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    opacity: 0;
+    background: radial-gradient(
+      ellipse at 50% 60%,
+      rgba(12, 10, 8, 0.85) 0%,
+      rgba(8, 8, 6, 0.95) 40%,
+      rgba(4, 4, 3, 1) 100%
+    );
+    transition: opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .scene-fog.active {
+    opacity: 1;
+  }
+
+  /* ---- Back button ---- */
+  .back-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #a1a1aa;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    padding: 0;
+  }
+  .back-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fafafa;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  /* ---- Map loading ---- */
+  .map-loading {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 20px;
+    border-radius: 12px;
+    backdrop-filter: blur(16px) saturate(1.4);
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    background: rgba(15, 15, 20, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #a1a1aa;
+    font-size: 0.82rem;
+  }
+
   /* ---- Mobile ---- */
   @media (max-width: 640px) {
     .top-bar {
@@ -1071,5 +1687,109 @@
     .hud-period { display: none; }
     /* Hide the separator after hidden period */
     .hud-period + .hud-sep { display: none; }
+    .sound-toggle { bottom: 8px; left: 8px; }
+    .music-toggle { bottom: 8px; left: 42px; }
+  }
+
+  /* ---- Sound toggle ---- */
+  .sound-toggle {
+    position: fixed;
+    bottom: 16px;
+    left: 16px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 50%;
+    background: rgba(15, 15, 20, 0.6);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: #71717a;
+    cursor: pointer;
+    transition: all 0.15s;
+    opacity: 0.6;
+  }
+  .sound-toggle:hover {
+    opacity: 1;
+    color: #a1a1aa;
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  /* ---- Music toggle ---- */
+  .music-toggle {
+    position: fixed;
+    bottom: 16px;
+    left: 50px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 50%;
+    background: rgba(15, 15, 20, 0.6);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: #71717a;
+    cursor: pointer;
+    transition: all 0.15s;
+    opacity: 0.6;
+  }
+  .music-toggle:hover {
+    opacity: 1;
+    color: #a1a1aa;
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  /* ---- Volume slider in drawer ---- */
+  .volume-slider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .volume-label {
+    font-size: 0.7rem;
+    color: #71717a;
+    min-width: 42px;
+  }
+  .volume-slider input[type="range"] {
+    flex: 1;
+    height: 3px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+  .volume-slider input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #a1a1aa;
+    border: none;
+    cursor: pointer;
+  }
+  .volume-slider input[type="range"]::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #a1a1aa;
+    border: none;
+    cursor: pointer;
+  }
+
+  /* ---- Visual cue layer ---- */
+  .visual-cue-layer {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 3;
   }
 </style>
