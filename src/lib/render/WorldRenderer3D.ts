@@ -138,6 +138,10 @@ export class WorldRenderer3D {
   private frameCount: number = 0;
   private lastSkyDaylight: number = -1; // cache sky dome updates
 
+  // Performance safeguard — dynamic FPS-based quality scaling
+  private fpsHistory: number[] = [];
+  private performanceScale: number = 1.0; // 1 = full quality, 0 = minimum
+
   // Reusable fog object (avoid creating new THREE.Fog every frame)
   private fog: THREE.Fog;
 
@@ -405,16 +409,20 @@ export class WorldRenderer3D {
     this.targetExposure = 0.90 + daylight * 0.65 + eveningFactor * 0.08;
 
     // ── Castle-focused lights ──────────────────────────────────
-    // Key light: warm spotlight gives castle extra illumination.
-    // Strongest during clear day, warm amber beacon at night.
+    // The castle is the visual anchor. At night it should GLOW like
+    // a landmark — warm key light creates the "inhabited" feeling,
+    // strong rim light ensures the silhouette pops against the sky.
     //
+    // Key light: warm spotlight aimed at castle center.
     // Day: 0.80 warm-white (castle pops against grass)
-    // Night: 0.40 warm amber (castle clearly reads as focal point)
+    // Night: 0.55 warm amber (castle is brightest thing in scene)
     // Evening: warm golden boost
-    const castleKeyBase = 0.40 + daylight * 0.40;
+    const castleKeyBase = 0.55 + daylight * 0.25;
     this.castleKeyLight.intensity = castleKeyBase + eveningFactor * 0.15;
 
-    // Key light color: matches sun but slightly warmer to favor castle
+    // Key light color: warm white during day, rich warm amber at night.
+    // The night color is deliberately warm — contrasts with cool moonlight
+    // on the surrounding terrain, making the castle the obvious focal point.
     if (daylight > 0.4) {
       this.castleKeyLight.color.setHex(0xfff8ee); // warm white
     } else if (eveningFactor > 0) {
@@ -422,20 +430,21 @@ export class WorldRenderer3D {
         new THREE.Color(0xffc870), eveningFactor * 0.3
       );
     } else {
-      // Night: warm amber fill
-      this.castleKeyLight.color.setHex(0xffe0a0).lerp(
-        new THREE.Color(0xfff8ee), daylight * 3 // transition from amber to white
+      // Night: rich warm amber — castle glows warmly against cool blues
+      this.castleKeyLight.color.setHex(0xffd890).lerp(
+        new THREE.Color(0xfff8ee), daylight * 3
       );
     }
 
     // Rim light: creates edge separation so castle silhouette is clear.
-    // Cool-toned during day (sky-like backlight), cool-silver at night.
-    // Stronger at night to ensure castle reads against dark sky.
+    // AT NIGHT: the rim light is STRONGER than during the day.
+    // The moonlit edge highlight makes the castle pop against the night sky.
+    // This is the subtle "magic outline" that makes the castle look special.
     //
-    // Day: 0.45 (clear edge definition against green terrain)
-    // Night: 0.35 (strong moonlit edge — castle silhouette always readable)
+    // Day: 0.40 (clear edge definition against green terrain)
+    // Night: 0.50 (strong moonlit rim — castle silhouette always pops)
     // Evening: warmer, golden edge glow
-    const rimBase = 0.35 + daylight * 0.10;
+    const rimBase = 0.50 - daylight * 0.10; // INVERTED: stronger at night!
     this.castleRimLight.intensity = rimBase + eveningFactor * 0.10;
 
     if (daylight > 0.4) {
@@ -446,9 +455,12 @@ export class WorldRenderer3D {
       this.castleRimLight.color.setHex(0xc0d8f0).lerp(
         new THREE.Color(0xf0c888), eveningFactor * 0.4
       );
-    } else if (nightFactor > 0.5) {
-      // Night: brighter cool-silver moonlit edge (ensures silhouette reads)
-      this.castleRimLight.color.setHex(0x9aaccc);
+    } else if (nightFactor > 0.3) {
+      // Night: bright cool-silver with subtle blue — moonlit magic outline
+      const nightEdge = (nightFactor - 0.3) / 0.7;
+      this.castleRimLight.color.setHex(0xa0b8d8).lerp(
+        new THREE.Color(0xb0c8e8), nightEdge * 0.5
+      );
     } else {
       this.castleRimLight.color.setHex(0xc0d8f0);
     }
@@ -982,6 +994,40 @@ export class WorldRenderer3D {
     this.time += deltaTime / 1000;
     this.frameCount++;
 
+    // ── Performance safeguard: track FPS and auto-scale quality ──
+    if (deltaTime > 0) {
+      const fps = 1000 / deltaTime;
+      this.fpsHistory.push(fps);
+      if (this.fpsHistory.length > 60) this.fpsHistory.shift(); // rolling 60-frame window
+
+      // Every 30 frames, evaluate performance and adjust scale
+      if (this.frameCount % 30 === 0 && this.fpsHistory.length >= 30) {
+        const avgFps = this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length;
+        let targetScale = this.performanceScale;
+
+        if (avgFps < 24) {
+          // Critical: aggressively reduce quality
+          targetScale = Math.max(0.2, this.performanceScale - 0.15);
+        } else if (avgFps < 35) {
+          // Low: gradually reduce
+          targetScale = Math.max(0.4, this.performanceScale - 0.05);
+        } else if (avgFps > 50 && this.performanceScale < 1.0) {
+          // Headroom: gradually restore quality
+          targetScale = Math.min(1.0, this.performanceScale + 0.03);
+        }
+
+        // Smooth transition (invisible to user)
+        this.performanceScale += (targetScale - this.performanceScale) * 0.3;
+      }
+    }
+
+    // ── Light LOD: scale castle lights by camera distance ──
+    const cameraDist = this.camera.position.length();
+    this.castleBuilder.setLightLOD(cameraDist);
+    if (this.performanceScale < 0.95) {
+      this.castleBuilder.applyPerformanceScale(this.performanceScale);
+    }
+
     this.update(deltaTime);
     this.doRender();
 
@@ -1312,16 +1358,21 @@ export class WorldRenderer3D {
         this.castleRimLight.color.lerp(new THREE.Color(0x4a6a4a), 0.5);
       }
 
-      // Legendary: castle gets stronger key and rim — the hero glow
+      // Legendary: castle gets stronger key and rim — the hero glow.
+      // At night, legendary castles are dramatically boosted — they become
+      // the undisputed visual centerpiece, glowing warmly against the cool night.
       if (this.renderState.isLegendary && this.renderState.hasGraduated) {
-        this.castleKeyLight.intensity *= 1.20;
-        this.castleRimLight.intensity *= 1.15;
-        // Night legendary: key light gains warm golden cast
+        this.castleKeyLight.intensity *= 1.25;
+        this.castleRimLight.intensity *= 1.20;
+        // Night legendary: warm golden key + strong cool rim = magical silhouette
         if (nightFactor > 0.3) {
           const legendaryNight = (nightFactor - 0.3) / 0.7;
-          this.castleKeyLight.color.lerp(new THREE.Color(0xffe0a0), legendaryNight * 0.3);
-          this.castleKeyLight.intensity += legendaryNight * 0.15;
-          this.castleRimLight.intensity += legendaryNight * 0.10;
+          // Key light: warm golden glow intensifies — castle feels inhabited
+          this.castleKeyLight.color.lerp(new THREE.Color(0xffd890), legendaryNight * 0.4);
+          this.castleKeyLight.intensity += legendaryNight * 0.25;
+          // Rim light: cool magical edge glow intensifies — silhouette pops
+          this.castleRimLight.intensity += legendaryNight * 0.20;
+          this.castleRimLight.color.lerp(new THREE.Color(0xb0c8f0), legendaryNight * 0.2);
         }
       }
 

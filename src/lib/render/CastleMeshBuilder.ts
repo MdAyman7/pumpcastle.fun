@@ -50,12 +50,22 @@ export class CastleMeshBuilder {
   private quality: MaterialQuality = 'normal';
   private qualityTransition: QualityTransition | null = null;
 
-  // Torch lights
-  private torchLights: THREE.PointLight[] = [];
+  // Castle zone lights — max 4 PointLights total for the entire castle.
+  // Replaces the old system of per-window + per-torch + per-accent lights (~75 total).
+  // Zone 1: Warm interior glow (positioned at castle center, covers windows)
+  // Zone 2: Entrance torch glow (positioned at gate, covers torch area)
+  // Zone 3: Legendary upper accent (positioned at spire, covers upper castle)
+  // Zone 4: Legendary base rim (positioned at base, ground light spill)
+  private zoneLights: THREE.PointLight[] = [];
 
-  // Window glow lights (warm interior glow at night)
-  private windowLights: THREE.PointLight[] = [];
+  // Emissive window glow meshes (NO real lights — pure visual)
   private windowGlowMeshes: THREE.Mesh[] = [];
+  // Number of actual window pane+halo pairs (for indexing in update loop)
+  private windowPaneCount: number = 0;
+  // Night-only ambient glow meshes (ground glow, torch spill circles)
+  private nightGlowMeshes: THREE.Mesh[] = [];
+  // Light LOD state
+  private lightLODScale: number = 1.0;
 
   // Flags
   private flagMeshes: THREE.Mesh[] = [];
@@ -102,6 +112,41 @@ export class CastleMeshBuilder {
     this.scene.add(this.bloomGroup);
   }
 
+  // ─── Light LOD ──────────────────────────────────────────────
+
+  /**
+   * Set light LOD scale based on camera distance to castle.
+   * Called by WorldRenderer3D each frame.
+   *
+   * Close (< 20):  1.0 — full lighting
+   * Mid (20-40):   0.6 — reduced intensity, zone lights still active
+   * Far (> 40):    0.2 — emissive-only visual, zone lights nearly off
+   *
+   * The scale is smoothed to prevent popping.
+   */
+  setLightLOD(cameraDistance: number): void {
+    let target: number;
+    if (cameraDistance < 20) {
+      target = 1.0;
+    } else if (cameraDistance < 40) {
+      target = 1.0 - (cameraDistance - 20) / 20 * 0.6; // 1.0 → 0.4
+    } else {
+      target = Math.max(0.1, 0.4 - (cameraDistance - 40) / 40 * 0.3); // 0.4 → 0.1
+    }
+    // Smooth transition (no popping)
+    this.lightLODScale += (target - this.lightLODScale) * 0.1;
+  }
+
+  /**
+   * Apply performance scaling — called when FPS drops.
+   * Reduces zone light intensity and disables decorative effects.
+   * @param scale 0-1 where 1 = full quality, 0 = minimum
+   */
+  applyPerformanceScale(scale: number): void {
+    // Clamp LOD scale down (performance override never increases it)
+    this.lightLODScale = Math.min(this.lightLODScale, scale);
+  }
+
   // ─── Update ─────────────────────────────────────────────────
 
   update(state: RenderState): void {
@@ -128,6 +173,7 @@ export class CastleMeshBuilder {
     if (state.isLegendary) this.updateLegendaryEffects(state);
     this.updateTorchLights(state);
     this.updateWindowLights(state);
+    this.updateNightGlow(state);
     this.updateDebris(state);
 
     if (state.smoothDecay > 0.5 && state.smoothDecay > this.lastDecay + 0.01) {
@@ -164,16 +210,21 @@ export class CastleMeshBuilder {
     this.clearGroup(this.flagsGroup);
     this.clearGroup(this.constructionGroup);
     this.clearGroup(this.bloomGroup);
-    this.torchLights.forEach(l => { this.scene.remove(l); l.dispose(); });
-    this.torchLights = [];
-    this.windowLights.forEach(l => { this.scene.remove(l); l.dispose(); });
-    this.windowLights = [];
+    this.zoneLights.forEach(l => { this.scene.remove(l); l.dispose(); });
+    this.zoneLights = [];
     this.windowGlowMeshes.forEach(m => {
       this.castleGroup.remove(m);
       m.geometry.dispose();
       if (m.material instanceof THREE.Material) m.material.dispose();
     });
     this.windowGlowMeshes = [];
+    this.windowPaneCount = 0;
+    this.nightGlowMeshes.forEach(m => {
+      this.castleGroup.remove(m);
+      m.geometry.dispose();
+      if (m.material instanceof THREE.Material) m.material.dispose();
+    });
+    this.nightGlowMeshes = [];
     this.flagMeshes = [];
 
     // Post-graduation: always fully built. Only decay applies, never incompleteness.
@@ -826,20 +877,18 @@ export class CastleMeshBuilder {
   // ─── Legendary bloom halo (subtle sphere of light) ────────
 
   private addBloomHalo(x: number, y: number, z: number, radius: number): void {
+    // Emissive-only bloom sphere — NO PointLight (zone light handles actual lighting).
+    // BackSide rendering makes the sphere glow like a halo around the tower tip.
     const haloMat = new THREE.MeshBasicMaterial({
       color: 0xFFF8E1,
       transparent: true,
       opacity: 0.12,
       side: THREE.BackSide,
+      depthWrite: false,
     });
-    const halo = new THREE.Mesh(new THREE.SphereGeometry(radius, 16, 12), haloMat);
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 8), haloMat);
     halo.position.set(x, y, z);
     this.bloomGroup.add(halo);
-
-    // Point light for soft bloom
-    const bloomLight = new THREE.PointLight(0xFFE8B0, 0.8, 12);
-    bloomLight.position.set(x, y, z);
-    this.bloomGroup.add(bloomLight);
   }
 
   // ─── Color gradients (tier-scaled palette enrichment) ──────
@@ -892,76 +941,47 @@ export class CastleMeshBuilder {
   private addLegendaryOverrides(state: RenderState): void {
     if (!this.mats) return;
 
-    // ── Accent point lights: warm golden uplighting on key tower positions ──
     const tier = state.tier;
-    const accentColor = 0xFFE8B0;
-    const accentIntensity = 0.5;
-    const accentRange = 10;
 
+    // ── Legendary zone lights (max 2 additional PointLights) ──────
+    // Instead of 11+ per-tower accent lights + 6 bloom lights (17 total),
+    // we use just 2 strategically placed lights that approximate the
+    // same warm golden glow. Emissive bloom halos provide the rest.
+    const castleHeight = tier === 'citadel' ? 15 : tier === 'fortress' ? 10 : tier === 'castle' ? 8 : 6;
+    const castleRadius = tier === 'citadel' ? 14 : tier === 'fortress' ? 10 : tier === 'castle' ? 6 : 3;
+
+    // Zone 3: Legendary upper accent — positioned at top of castle,
+    // warm golden light cascading down all towers.
+    const upperAccent = new THREE.PointLight(0xFFE8B0, 0.7, castleRadius * 2);
+    upperAccent.position.set(0, castleHeight, 0);
+    upperAccent.castShadow = false;
+    this.scene.add(upperAccent);
+    this.zoneLights.push(upperAccent);
+
+    // Zone 4: Legendary base rim — positioned low, creates warm ground spill
+    // and uplight on castle walls (mimics the old 4 base rim lights)
+    const baseRim = new THREE.PointLight(0xFFF0D0, 0.3, castleRadius * 1.5);
+    baseRim.position.set(0, 0.5, 0);
+    baseRim.castShadow = false;
+    this.scene.add(baseRim);
+    this.zoneLights.push(baseRim);
+
+    // ── Emissive bloom halos (NO PointLights — pure visual) ──────
+    // These sphere meshes fake glow with MeshBasicMaterial opacity.
+    // Zero GPU light cost, but visually identical to the old bloom system.
     if (tier === 'citadel') {
-      // Central spire glow — warm light cascading down
-      this.addLegendaryAccentLight(0, 18, 0, accentColor, accentIntensity * 1.4, accentRange * 1.5);
-
-      // 6 surrounding tower tips
-      for (let i = 0; i < 6; i++) {
-        const angle = (i / 6) * Math.PI * 2;
-        this.addLegendaryAccentLight(
-          Math.cos(angle) * 4, 14, Math.sin(angle) * 4,
-          accentColor, accentIntensity * 0.7, accentRange
-        );
-      }
-
-      // Base rim lights for clean silhouette against ground
-      for (let i = 0; i < 4; i++) {
-        const angle = (i / 4) * Math.PI * 2 + Math.PI / 4;
-        this.addLegendaryAccentLight(
-          Math.cos(angle) * 14, 0.5, Math.sin(angle) * 14,
-          0xFFF0D0, 0.3, 8
-        );
-      }
-
-      // Additional bloom halos on the 6 tower spires
+      // Central spire bloom
+      this.addBloomHalo(0, castleHeight + 7, 0, 1.5);
+      // 6 surrounding tower tip blooms
       for (let i = 0; i < 6; i++) {
         const angle = (i / 6) * Math.PI * 2;
         this.addBloomHalo(Math.cos(angle) * 4, 15.5, Math.sin(angle) * 4, 1.0);
       }
-
     } else if (tier === 'fortress') {
-      // Central keep pinnacle
-      this.addLegendaryAccentLight(0, 12, 0, accentColor, accentIntensity * 1.2, accentRange);
       this.addBloomHalo(0, 12, 0, 1.2);
-
-      // Inner towers
-      const innerTowers = [[3.5, 3.5], [-3.5, 3.5], [-3.5, -3.5], [3.5, -3.5]];
-      for (const [x, z] of innerTowers) {
-        this.addLegendaryAccentLight(x, 10, z, accentColor, accentIntensity * 0.6, accentRange * 0.8);
-      }
-
-      // Base rim for silhouette
-      for (let i = 0; i < 4; i++) {
-        const angle = (i / 4) * Math.PI * 2;
-        this.addLegendaryAccentLight(
-          Math.cos(angle) * 10, 0.5, Math.sin(angle) * 10,
-          0xFFF0D0, 0.25, 6
-        );
-      }
-
-    } else if (tier === 'castle') {
-      // Central keep top
-      this.addLegendaryAccentLight(0, 9, -1, accentColor, accentIntensity, accentRange * 0.8);
-
-      // Corner towers
-      const positions = [[-5, 5], [5, 5], [-5, -5], [5, -5]];
-      for (const [x, z] of positions) {
-        this.addLegendaryAccentLight(x, 8, z, accentColor, accentIntensity * 0.5, 6);
-      }
-
-    } else {
-      // Keep — more modest but still premium
-      this.addLegendaryAccentLight(0, 7, 0, accentColor, accentIntensity * 0.8, 6);
     }
 
-    // ── Ground radiance ring — warm uplight around castle base ──
+    // ── Ground radiance ring (emissive mesh — no real light) ─────
     const ringRadius = tier === 'citadel' ? 13 : tier === 'fortress' ? 9 : tier === 'castle' ? 6 : 3;
     const ringMat = new THREE.MeshBasicMaterial({
       color: 0xFFE8C0,
@@ -973,18 +993,6 @@ export class CastleMeshBuilder {
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.05;
     this.bloomGroup.add(ring);
-  }
-
-  /** Add a legendary accent point light tracked for cleanup */
-  private addLegendaryAccentLight(
-    x: number, y: number, z: number,
-    color: number, intensity: number, distance: number
-  ): void {
-    const light = new THREE.PointLight(color, intensity, distance);
-    light.position.set(x, y, z);
-    light.castShadow = false;
-    this.scene.add(light);
-    this.torchLights.push(light); // reuse cleanup array
   }
 
   // ─── Scaffolding ──────────────────────────────────────────
@@ -1100,13 +1108,9 @@ export class CastleMeshBuilder {
 
     // Bloom fades with decay — legendary retains more glow
     const bloomDecayMult = this.quality === 'legendary' ? 0.35 : 0.6;
-    const lightDecayMult = this.quality === 'legendary' ? 0.40 : 0.7;
     this.bloomGroup.traverse((child) => {
       if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshBasicMaterial) {
         child.material.opacity = 0.12 * (1 - decay * bloomDecayMult);
-      }
-      if (child instanceof THREE.PointLight) {
-        child.intensity = 0.8 * (1 - decay * lightDecayMult);
       }
     });
   }
@@ -1129,16 +1133,18 @@ export class CastleMeshBuilder {
 
     // ── Night amplification ─────────────────────────────────────
     // Legendary castles are MORE beautiful at night. Every emissive,
-    // every accent light, every bloom halo gets boosted. The castle
-    // becomes a glowing beacon — Disney castle at night.
+    // every accent light, every bloom halo gets boosted dramatically.
+    // The castle becomes a glowing beacon — a Disney castle at night.
+    // Night is when legendary castles SHINE — the contrast of warm
+    // golden glow against cool moonlit terrain is magical.
     const nightGlowBoost = nightFactor > 0.2
-      ? 1 + (nightFactor - 0.2) / 0.8 * 0.8  // up to 1.8× at full night
+      ? 1 + (nightFactor - 0.2) / 0.8 * 1.2  // up to 2.2× at full night (was 1.8)
       : 1;
     const nightBloomBoost = nightFactor > 0.2
-      ? 1 + (nightFactor - 0.2) / 0.8 * 1.2  // up to 2.2× bloom at full night
+      ? 1 + (nightFactor - 0.2) / 0.8 * 1.8  // up to 2.8× bloom at full night (was 2.2)
       : 1;
     const nightAccentBoost = nightFactor > 0.2
-      ? 1 + (nightFactor - 0.2) / 0.8 * 1.0  // up to 2× accent lights
+      ? 1 + (nightFactor - 0.2) / 0.8 * 1.5  // up to 2.5× accent lights (was 2.0)
       : 1;
 
     // Pulse glow on accent/trim + clearcoat shimmer
@@ -1165,48 +1171,63 @@ export class CastleMeshBuilder {
       if (mat.clearcoat > 0) {
         mat.clearcoat = 0.35 * gentlePulse * decayClean;
       }
-      // At night: subtle emissive glow on stone walls (moonlight + inner warmth)
+      // At night: stone walls catch warm inner glow + cool moonlight.
+      // The subtle emissive prevents stone from going dark and adds
+      // the magical "lit from within" quality that makes legendary shine.
       if (nightFactor > 0.3) {
-        const stoneNightGlow = (nightFactor - 0.3) / 0.7 * 0.06 * decayFade;
+        const nightStrength = (nightFactor - 0.3) / 0.7;
+        const stoneNightGlow = nightStrength * 0.10 * decayFade; // stronger (was 0.06)
         mat.emissiveIntensity = stoneNightGlow;
         if (mat.emissive.r < 0.01) {
-          mat.emissive.setHex(0x403020); // warm subtle stone glow
+          // Warm golden stone glow (brighter than before)
+          mat.emissive.setHex(0x504030);
+        }
+        // At deep night, add slight clearcoat boost — moonlight reflections
+        if (nightStrength > 0.5 && mat.clearcoat !== undefined) {
+          mat.clearcoat = Math.max(mat.clearcoat, 0.15 * nightStrength * decayClean);
         }
       } else {
         mat.emissiveIntensity = 0;
       }
     }
 
-    // Roof material: pulsing emissive + night boost (golden roof glows at night)
+    // Roof material: pulsing emissive + strong night boost.
+    // Golden roofs catching moonlight + warm inner glow = magical.
     const roofNightBoost = nightFactor > 0.2
-      ? 1 + (nightFactor - 0.2) / 0.8 * 1.5  // roof glows 2.5× at night
+      ? 1 + (nightFactor - 0.2) / 0.8 * 2.0  // roof glows 3× at night (was 2.5)
       : 1;
     if (this.mats.roof.emissiveIntensity !== undefined) {
-      this.mats.roof.emissiveIntensity = 0.10 * gentlePulse * decayFade * roofNightBoost;
+      this.mats.roof.emissiveIntensity = 0.12 * gentlePulse * decayFade * roofNightBoost;
+    }
+    // Roof clearcoat shimmer at night — golden roofs catch moonlight
+    if (nightFactor > 0.3 && this.mats.roof.clearcoat !== undefined) {
+      const moonShimmer = (nightFactor - 0.3) / 0.7;
+      this.mats.roof.clearcoat = Math.max(this.mats.roof.clearcoat, 0.3 * moonShimmer);
     }
 
-    // Bloom halos: soft breathing glow, resistant to decay, amplified at night
+    // Bloom halos: emissive-only meshes (no PointLights in bloom group).
+    // Soft breathing glow, amplified dramatically at night.
     this.bloomGroup.traverse((child) => {
       if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshBasicMaterial) {
         const baseOpacity = 0.10 + Math.sin(state.time * 1.5) * 0.05;
-        child.material.opacity = baseOpacity * decayFade * nightBloomBoost;
-        // Clamp so bloom doesn't go completely opaque
-        child.material.opacity = Math.min(0.40, child.material.opacity);
-      }
-      // Bloom point lights also boost at night
-      if (child instanceof THREE.PointLight) {
-        child.intensity = 0.8 * decayFade * nightGlowBoost;
+        child.material.opacity = Math.min(0.55, baseOpacity * decayFade * nightBloomBoost);
+        // At deep night, shift halo color slightly warmer for cozy magic
+        if (nightFactor > 0.5) {
+          const warmShift = (nightFactor - 0.5) / 0.5;
+          child.material.color.setHex(0xFFF8E1).lerp(
+            new THREE.Color(0xFFE8C0), warmShift * 0.3
+          );
+        }
       }
     });
 
-    // Legendary accent lights: dim gently with decay, never fully off, amplified at night
-    for (const light of this.torchLights) {
-      // Only modulate the warm accent lights (golden color range)
-      const c = light.color;
-      if (c.r > 0.9 && c.g > 0.8 && c.b < 0.8) {
-        // These are the legendary accent lights — gentle pulse + night boost
-        light.intensity *= gentlePulse * decayFade * nightAccentBoost;
-      }
+    // Legendary zone lights (zones 3 and 4): pulse + night boost
+    // Zone 3 = upper accent, Zone 4 = base rim
+    const lodScale = this.lightLODScale;
+    for (let i = 2; i < this.zoneLights.length; i++) {
+      const light = this.zoneLights[i];
+      const baseIntensity = i === 2 ? 0.7 : 0.3; // upper vs base
+      light.intensity = baseIntensity * gentlePulse * decayFade * nightAccentBoost * lodScale;
     }
   }
 
@@ -1307,24 +1328,17 @@ export class CastleMeshBuilder {
       }
     }
 
-    // Create lights and glow meshes for each window position.
-    // At night, windows are THE primary visual draw — warm amber light
-    // spilling out contrasts beautifully against cool moonlit walls.
-    const windowColor = state.isLegendary ? 0xFFE0A0 : 0xFFA830;
+    // ── EMISSIVE-ONLY window glow (NO real PointLights) ─────────
+    // Windows use MeshBasicMaterial panes + halos for warm glow effect.
+    // This is purely visual — zero GPU light cost for any number of windows.
+    // The scene-level zone lights provide the actual light spill on geometry.
     const glowColor = state.isLegendary ? 0xFFF0C8 : 0xFFB840;
-    // Shared glow geometry (instead of allocating per window)
+    const haloColor = state.isLegendary ? 0xFFF0D0 : 0xFFC050;
+    // Shared geometries (1 allocation each, reused across all windows)
     const glowPaneGeom = new THREE.PlaneGeometry(0.5, 0.6);
-    // Shared soft halo geometry (larger soft glow behind the pane)
     const glowHaloGeom = new THREE.PlaneGeometry(1.2, 1.4);
 
     for (const [x, y, z] of windowPositions) {
-      // Point light (warm window glow) — wider range for ground spill
-      const light = new THREE.PointLight(windowColor, 0, 8);
-      light.position.set(x, y, z);
-      light.castShadow = false;
-      this.scene.add(light);
-      this.windowLights.push(light);
-
       // Lit window pane (crisp warm rectangle)
       const glowMat = new THREE.MeshBasicMaterial({
         color: glowColor,
@@ -1334,15 +1348,13 @@ export class CastleMeshBuilder {
       });
       const glowMesh = new THREE.Mesh(glowPaneGeom, glowMat);
       glowMesh.position.set(x, y, z);
-      // Orient glow mesh to face outward from castle center
       glowMesh.lookAt(x * 2, y, z * 2);
       this.castleGroup.add(glowMesh);
       this.windowGlowMeshes.push(glowMesh);
 
-      // Soft halo behind the pane (light spill aura around each window)
-      // This creates the warm "glow cloud" effect visible from distance
+      // Soft halo behind the pane (fake light spill — no GPU light cost)
       const haloMat = new THREE.MeshBasicMaterial({
-        color: state.isLegendary ? 0xFFF0D0 : 0xFFC050,
+        color: haloColor,
         transparent: true,
         opacity: 0,
         side: THREE.DoubleSide,
@@ -1351,12 +1363,53 @@ export class CastleMeshBuilder {
       const haloMesh = new THREE.Mesh(glowHaloGeom, haloMat);
       haloMesh.position.set(x, y, z);
       haloMesh.lookAt(x * 2, y, z * 2);
-      // Offset slightly in front so it doesn't z-fight
       const dir = new THREE.Vector3(x, 0, z).normalize().multiplyScalar(0.05);
       haloMesh.position.add(dir);
       this.castleGroup.add(haloMesh);
-      this.windowGlowMeshes.push(haloMesh); // tracked for updates and cleanup
+      this.windowGlowMeshes.push(haloMesh);
     }
+
+    this.windowPaneCount = windowPositions.length;
+
+    // ── Zone lights (max 4 real PointLights for the ENTIRE castle) ──
+    // These replace all per-window, per-torch, and decorative lights.
+    // Positioned at key locations to approximate many small lights.
+    const windowLightColor = state.isLegendary ? 0xFFE0A0 : 0xFFA830;
+    const castleHeight = tier === 'citadel' ? 12 : tier === 'fortress' ? 6 : tier === 'castle' ? 5 : 3;
+    const castleRadius = tier === 'citadel' ? 12 : tier === 'fortress' ? 8 : tier === 'castle' ? 5 : 2;
+
+    // Zone 1: Interior warm glow — positioned at castle center, covers all windows
+    const interiorLight = new THREE.PointLight(windowLightColor, 0, castleRadius * 2.5);
+    interiorLight.position.set(0, castleHeight * 0.5, 0);
+    interiorLight.castShadow = false;
+    this.scene.add(interiorLight);
+    this.zoneLights.push(interiorLight);
+
+    // Zone 2: Entrance/torch glow — positioned at front gate area
+    const gateZ = tier === 'citadel' ? 13 : tier === 'fortress' ? 9 : tier === 'castle' ? 5.5 : 2;
+    const torchLight = new THREE.PointLight(0xff8830, 0, castleRadius * 1.5);
+    torchLight.position.set(0, 2.5, gateZ);
+    torchLight.castShadow = false;
+    this.scene.add(torchLight);
+    this.zoneLights.push(torchLight);
+
+    // ── Castle ground glow pool (emissive mesh — no real light) ───
+    const glowRadius = tier === 'citadel' ? 16 : tier === 'fortress' ? 11 : tier === 'castle' ? 7 : 4;
+    const groundGlowMat = new THREE.MeshBasicMaterial({
+      color: state.isLegendary ? 0xFFE8B0 : 0xFFA850,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const groundGlow = new THREE.Mesh(
+      new THREE.CircleGeometry(glowRadius, 32),
+      groundGlowMat
+    );
+    groundGlow.rotation.x = -Math.PI / 2;
+    groundGlow.position.y = 0.04;
+    this.castleGroup.add(groundGlow);
+    this.nightGlowMeshes.push(groundGlow);
   }
 
   /**
@@ -1369,7 +1422,7 @@ export class CastleMeshBuilder {
     const eveningFactor = state.eveningFactor;
 
     // Windows start glowing at dusk (nightFactor > 0.15)
-    // Full brightness at nightFactor > 0.5 (slightly earlier — castle lights up sooner)
+    // Full brightness at nightFactor > 0.5
     const windowGlow = nightFactor < 0.15 ? 0
       : nightFactor < 0.5 ? (nightFactor - 0.15) / 0.35
       : 1;
@@ -1377,11 +1430,52 @@ export class CastleMeshBuilder {
     // Evening: partial glow (golden hour warmth from inside)
     const effectiveGlow = Math.max(windowGlow, eveningFactor * 0.35);
 
-    if (effectiveGlow < 0.01) {
-      // Daytime: all window lights off
-      for (const light of this.windowLights) {
-        light.intensity = 0;
+    // Decay dims window lights (but legendary resists)
+    const decayDim = state.isLegendary
+      ? 1 - state.smoothDecay * 0.25
+      : 1 - state.smoothDecay * 0.6;
+
+    // Cursed/zombie: dim
+    const stateMult = state.isCursed ? 0.15 : state.isZombie ? 0.25 : 1;
+    const legendaryBoost = state.isLegendary ? 1.8 : 1.0;
+    const nightIntensityBoost = 1 + nightFactor * 0.6;
+
+    // ── Update zone lights (the 2–4 real PointLights) ──────────
+    // LOD scale is applied to reduce GPU cost when camera is far
+    const lodScale = this.lightLODScale;
+    const zoneIntensity = 0.8 * effectiveGlow * decayDim * stateMult * legendaryBoost * nightIntensityBoost * lodScale;
+
+    if (this.zoneLights.length > 0) {
+      // Zone 1: Interior warm glow
+      const interior = this.zoneLights[0];
+      const interiorFlicker = 0.94 + Math.sin(state.time * 1.2) * 0.06;
+      interior.intensity = zoneIntensity * interiorFlicker;
+      if (nightFactor > 0.3) {
+        const warmth = (nightFactor - 0.3) / 0.7;
+        interior.color.setHex(state.isLegendary ? 0xFFE0A0 : 0xFFA830);
+        interior.color.lerp(new THREE.Color(state.isLegendary ? 0xFFF0C0 : 0xFFCC60), warmth * 0.4);
       }
+    }
+    if (this.zoneLights.length > 1) {
+      // Zone 2: Entrance/torch glow
+      const torch = this.zoneLights[1];
+      const torchFlicker = 0.90 + Math.random() * 0.15;
+      // Torches are slightly brighter — entrance focal point
+      const torchBoost = 1 + nightFactor * 1.2;
+      torch.intensity = (state.isCursed ? 0.2 : state.isZombie ? 0.3 : 0.6)
+        * torchBoost * torchFlicker * decayDim * lodScale;
+      if (nightFactor > 0.2) {
+        const warmShift = (nightFactor - 0.2) / 0.8;
+        torch.color.setHex(0xff6600);
+        torch.color.lerp(new THREE.Color(0xFFBB40), warmShift * 0.7);
+      }
+    }
+
+    // ── Update emissive window glow meshes (zero GPU light cost) ──
+    const baseOpacity = 0.6 * effectiveGlow * decayDim * stateMult;
+    const haloOpacity = baseOpacity * 0.35;
+
+    if (effectiveGlow < 0.01) {
       for (const mesh of this.windowGlowMeshes) {
         if (mesh.material instanceof THREE.MeshBasicMaterial) {
           mesh.material.opacity = 0;
@@ -1390,102 +1484,62 @@ export class CastleMeshBuilder {
       return;
     }
 
-    // Decay dims window lights (but legendary resists)
-    const decayDim = state.isLegendary
-      ? 1 - state.smoothDecay * 0.25
-      : 1 - state.smoothDecay * 0.6;
-
-    // Cursed/zombie: window lights flicker erratically or are dim
-    const stateMult = state.isCursed ? 0.15 : state.isZombie ? 0.25 : 1;
-
-    // Legendary windows glow stronger and warmer
-    const legendaryBoost = state.isLegendary ? 1.8 : 1.0;
-
-    // Night intensity boost: windows are the HERO of night visuals.
-    // They should be the warmest, brightest part of the scene — the eye
-    // is drawn to them immediately. Intensity peaks at full night.
-    const nightIntensityBoost = 1 + nightFactor * 0.6; // up to 1.6× at night
-    const baseIntensity = 0.8 * effectiveGlow * decayDim * stateMult * legendaryBoost * nightIntensityBoost;
-    const baseOpacity = 0.6 * effectiveGlow * decayDim * stateMult;
-
-    for (let i = 0; i < this.windowLights.length; i++) {
-      const light = this.windowLights[i];
-      // Subtle per-window flicker (warm, not frantic — like candles inside)
-      const flicker = 0.92 + Math.sin(state.time * 1.5 + i * 2.7) * 0.08;
-      light.intensity = baseIntensity * flicker;
-      // Range expands significantly at night — light spills further onto ground
-      light.distance = 8 + nightFactor * 5; // 8 → 13 at full night
-
-      // At night, windows shift warmer (amber → warm gold)
-      if (nightFactor > 0.3) {
-        const warmth = (nightFactor - 0.3) / 0.7;
-        light.color.setHex(state.isLegendary ? 0xFFE0A0 : 0xFFA830);
-        light.color.lerp(new THREE.Color(state.isLegendary ? 0xFFF0C0 : 0xFFCC60), warmth * 0.4);
-      }
-    }
-
-    // Window glow meshes: alternating pane and halo (every other mesh)
-    // Panes are crisp and bright; halos are soft and diffuse
-    const haloOpacity = baseOpacity * 0.35; // halos are much softer than panes
     for (let i = 0; i < this.windowGlowMeshes.length; i++) {
       const mesh = this.windowGlowMeshes[i];
       if (mesh.material instanceof THREE.MeshBasicMaterial) {
-        const isHalo = i % 2 === 1; // odd indices are halos
+        const isHalo = i % 2 === 1;
         const flicker = 0.90 + Math.sin(state.time * (isHalo ? 0.8 : 1.2) + i * 3.1) * 0.10;
         if (isHalo) {
-          // Soft window light halo: visible from distance, dreamy glow
           mesh.material.opacity = Math.min(0.30, haloOpacity * flicker * (1 + nightFactor * 0.5));
         } else {
-          // Crisp lit window pane: bright warm rectangle
           mesh.material.opacity = Math.min(0.80, baseOpacity * flicker);
         }
       }
     }
   }
 
-  // ─── Torch lights ─────────────────────────────────────────
+  // ─── Night ambient glow (ground pool, torch spill) ──────────
 
-  private updateTorchLights(state: RenderState): void {
+  /**
+   * Update night-only glow meshes: ground light pool and torch spill circles.
+   * These are invisible during the day and fade in at dusk, creating the
+   * warm "beacon" effect that makes the castle glow like a landmark.
+   */
+  private updateNightGlow(state: RenderState): void {
     const nightFactor = state.nightFactor;
     const eveningFactor = state.eveningFactor;
 
-    // Base brightness from state
-    const baseBrightness = state.isCursed ? 0.2 :
-      state.isZombie ? 0.3 : 0.5 + state.smoothVolume * 0.3;
+    // Night glow fades in starting at dusk
+    const glowFactor = nightFactor < 0.2 ? 0
+      : nightFactor < 0.5 ? (nightFactor - 0.2) / 0.3
+      : 1;
+    const effectiveGlow = Math.max(glowFactor, eveningFactor * 0.2);
 
-    // Night amplification: torches become warm beacons at night.
-    // They glow 3× brighter at full night — warm light pools at castle base.
-    // Evening also boosts warmth (golden hour torch glow).
-    const nightBoost = 1 + nightFactor * 2.0 + eveningFactor * 0.5;
+    // State modifiers
+    const stateMult = state.isCursed ? 0.1 : state.isZombie ? 0.15 : 1;
+    const decayDim = state.isLegendary
+      ? 1 - state.smoothDecay * 0.2
+      : 1 - state.smoothDecay * 0.5;
+    const legendaryBoost = state.isLegendary ? 1.4 : 1.0;
 
-    // Warm color shift at night: torches go from orange to warm amber-gold.
-    // The warmer color at night creates cozy contrast against cool moonlight.
-    const nightTorchColor = new THREE.Color(0xff6600);
-    if (nightFactor > 0.2) {
-      const warmShift = (nightFactor - 0.2) / 0.8;
-      nightTorchColor.lerp(new THREE.Color(0xFFBB40), warmShift * 0.7);
+    for (const mesh of this.nightGlowMeshes) {
+      if (mesh.material instanceof THREE.MeshBasicMaterial) {
+        const breathe = 0.92 + Math.sin(state.time * 0.6) * 0.08;
+        // Ground glow is very subtle — soft warm pool (max ~0.12 opacity)
+        mesh.material.opacity = Math.min(0.15,
+          0.10 * effectiveGlow * stateMult * decayDim * legendaryBoost * breathe
+        );
+      }
     }
+  }
 
-    // Torch light range expands significantly at night —
-    // warm light spills further, illuminating nearby ground
-    const baseDistance = 7;
-    const nightDistance = baseDistance + nightFactor * 6; // 7 → 13 at full night
+  // ─── Torch effects (emissive only — no per-torch PointLights) ────
 
-    for (const light of this.torchLights) {
-      // Skip legendary accent lights (golden hue, handled in updateLegendaryEffects)
-      const c = light.color;
-      const isLegendaryAccent = c.r > 0.9 && c.g > 0.8 && c.b < 0.8;
-      if (isLegendaryAccent) continue;
-
-      const flicker = 0.9 + Math.random() * 0.2;
-      light.intensity = baseBrightness * nightBoost * flicker * (1 - state.smoothDecay * 0.4);
-
-      // Warm color shift at night
-      light.color.copy(nightTorchColor);
-
-      // Expand range at night
-      light.distance = nightDistance;
-    }
+  // Torch lighting is handled by zone light #2 (entrance glow).
+  // This method is kept for API compatibility but torch zone light
+  // update is now integrated into updateWindowLights().
+  private updateTorchLights(_state: RenderState): void {
+    // No-op: zone light updates are in updateWindowLights
   }
 
   // ─── Debris ───────────────────────────────────────────────
@@ -1662,6 +1716,7 @@ export class CastleMeshBuilder {
     holder.rotation.z = Math.PI / 6;
     this.castleGroup.add(holder);
 
+    // Emissive flame cone (no PointLight — zone light covers this area)
     const flameMat = new THREE.MeshStandardMaterial({
       color: 0xff6600, emissive: 0xff4400, emissiveIntensity: 1.5
     });
@@ -1669,16 +1724,7 @@ export class CastleMeshBuilder {
     flame.position.set(x + 0.15, y + 0.25, z);
     this.castleGroup.add(flame);
 
-    // Main torch light (wider range for ground spill at night)
-    const light = new THREE.PointLight(0xff6600, 0.5, 7);
-    light.position.set(x + 0.15, y + 0.3, z);
-    light.castShadow = false;
-    this.scene.add(light);
-    this.torchLights.push(light);
-
-    // Ground light spill — warm pool of light beneath torch.
-    // This soft circle on the ground creates the "entrance glow" effect
-    // that makes the castle feel warm and inviting at night.
+    // Ground light spill — emissive mesh (fake warm pool, no real light)
     const spillMat = new THREE.MeshBasicMaterial({
       color: 0xFFA040,
       transparent: true,
@@ -1688,9 +1734,9 @@ export class CastleMeshBuilder {
     });
     const spill = new THREE.Mesh(new THREE.CircleGeometry(1.5, 16), spillMat);
     spill.rotation.x = -Math.PI / 2;
-    spill.position.set(x, 0.06, z); // just above ground
+    spill.position.set(x, 0.06, z);
     this.castleGroup.add(spill);
-    this.windowGlowMeshes.push(spill); // reuse glow mesh array for cleanup + night update
+    this.nightGlowMeshes.push(spill);
   }
 
   private addRunePillars(state: RenderState, glowMat: THREE.Material): void {
@@ -1712,12 +1758,8 @@ export class CastleMeshBuilder {
       rune.position.set(x, 2.5, z + 0.25);
       this.castleGroup.add(rune);
 
-      if (state.smoothDecay < 0.7) {
-        const runeLight = new THREE.PointLight(0xFFE082, 0.5, 4);
-        runeLight.position.set(x, 2.5, z + 0.5);
-        this.scene.add(runeLight);
-        this.torchLights.push(runeLight);
-      }
+      // Rune glow is emissive-only (the glowMat's emissive handles the visual).
+      // The zone accent light covers this area — no per-rune PointLight needed.
     }
   }
 
@@ -1774,16 +1816,21 @@ export class CastleMeshBuilder {
     this.builtPhaseIndex = -1;
     this.qualityTransition = null;
 
-    for (const light of this.torchLights) { this.scene.remove(light); light.dispose(); }
-    this.torchLights = [];
-    for (const light of this.windowLights) { this.scene.remove(light); light.dispose(); }
-    this.windowLights = [];
+    for (const light of this.zoneLights) { this.scene.remove(light); light.dispose(); }
+    this.zoneLights = [];
     for (const m of this.windowGlowMeshes) {
       this.castleGroup.remove(m);
       m.geometry.dispose();
       if (m.material instanceof THREE.Material) m.material.dispose();
     }
     this.windowGlowMeshes = [];
+    this.windowPaneCount = 0;
+    for (const m of this.nightGlowMeshes) {
+      this.castleGroup.remove(m);
+      m.geometry.dispose();
+      if (m.material instanceof THREE.Material) m.material.dispose();
+    }
+    this.nightGlowMeshes = [];
     for (const d of this.debris) {
       this.collapsingGroup.remove(d.mesh);
       d.mesh.geometry.dispose();
