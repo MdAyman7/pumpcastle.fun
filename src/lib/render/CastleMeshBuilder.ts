@@ -15,6 +15,7 @@ import {
   type TierMaterials,
   type MaterialQuality,
   type QualityTransition,
+  type BasePaintStore,
   qualityForTier,
   qualityForConstruction,
   createTierMaterials,
@@ -23,6 +24,8 @@ import {
   disposeTierMaterials,
   beginQualityTransition,
   updateQualityTransition,
+  snapshotBasePaint,
+  clampColorFloor,
   applyPrimaryGradient,
   applySecondaryGradient,
   applyRoofGradient,
@@ -49,6 +52,12 @@ export class CastleMeshBuilder {
   private mats: TierMaterials | null = null;
   private quality: MaterialQuality = 'normal';
   private qualityTransition: QualityTransition | null = null;
+  // Base paint layer — authoritative color snapshot set once per rebuild.
+  // All per-frame systems (decay, construction, legendary) compute FROM this,
+  // never from the current (already-tinted) material values.
+  private basePaint: BasePaintStore | null = null;
+  // Graduation lock — once true, base paint is never overwritten by construction.
+  private graduatedPaintLocked: boolean = false;
 
   // Castle zone lights — max 4 PointLights total for the entire castle.
   // Replaces the old system of per-window + per-torch + per-accent lights (~75 total).
@@ -241,9 +250,14 @@ export class CastleMeshBuilder {
     // Create fresh target materials
     const newMats = createTierMaterials(state.tier, newQuality);
 
+    // Snapshot base paint BEFORE any modifiers run.
+    // This is the authoritative "what the materials should look like"
+    // that decay/construction/effects compute from each frame.
+    const newBasePaint = snapshotBasePaint(newMats);
+
     // If still constructing (and NOT graduated), apply construction roughness
     if (!isFullyBuilt) {
-      applyConstructionToMaterials(newMats, state.smoothConstruction);
+      applyConstructionToMaterials(newMats, state.smoothConstruction, newBasePaint);
     }
 
     // Start animated transition if quality changed and we had previous materials
@@ -256,6 +270,12 @@ export class CastleMeshBuilder {
     }
 
     this.quality = newQuality;
+    // Graduation paint lock: once graduated, base paint is set and never
+    // overwritten by construction blending. Only decay modifies from base.
+    if (state.hasGraduated) {
+      this.graduatedPaintLocked = true;
+    }
+    this.basePaint = newBasePaint;
     this.mats = newMats;
 
     // Graduated = 100% built. Always.
@@ -1088,9 +1108,11 @@ export class CastleMeshBuilder {
     const decay = state.smoothDecay;
 
     // Apply decay through the material system (quality-aware).
-    // Legendary quality is handled specially in the material system —
-    // it produces cracks/rust/fading but NEVER reverts to low-quality materials.
-    applyDecayToMaterials(this.mats, decay, this.quality);
+    // Pass basePaint so decay computes FROM base each frame (no cumulative drift).
+    // During active quality transition, skip base paint restoration —
+    // let the transition handle color interpolation, apply decay after it completes.
+    const paint = this.qualityTransition?.active ? undefined : (this.basePaint ?? undefined);
+    applyDecayToMaterials(this.mats, decay, this.quality, paint);
 
     // Geometric distortion for heavy decay.
     // Legendary castles: much subtler distortion — walls crack but don't lean.
@@ -1147,16 +1169,18 @@ export class CastleMeshBuilder {
       ? 1 + (nightFactor - 0.2) / 0.8 * 1.5  // up to 2.5× accent lights (was 2.0)
       : 1;
 
-    // Pulse glow on accent/trim + clearcoat shimmer
+    // Pulse glow on accent/trim + clearcoat shimmer.
+    // Uses basePaint reference values — never overwrites base colors.
     for (const key of ['accent', 'trim', 'glow'] as const) {
       const mat = this.mats[key];
-      if (mat.emissiveIntensity > 0) {
-        const base = key === 'glow' ? 0.70 : (key === 'trim' ? 0.25 : 0.30);
-        mat.emissiveIntensity = base * pulse * decayFade * nightGlowBoost;
+      const bp = this.basePaint?.get(key);
+      const baseEmissive = bp ? bp.emissiveIntensity : (key === 'glow' ? 0.70 : (key === 'trim' ? 0.25 : 0.30));
+      if (baseEmissive > 0) {
+        mat.emissiveIntensity = baseEmissive * pulse * decayFade * nightGlowBoost;
       }
-      // Clearcoat shimmer — never fully lost
-      if (mat.clearcoat > 0) {
-        const baseClearcoat = key === 'glow' ? 0.8 : (key === 'trim' ? 0.55 : 0.6);
+      // Clearcoat shimmer — computed from base, never fully lost
+      const baseClearcoat = bp ? bp.clearcoat : (key === 'glow' ? 0.8 : (key === 'trim' ? 0.55 : 0.6));
+      if (baseClearcoat > 0) {
         mat.clearcoat = baseClearcoat * slowPulse * decayClean;
       }
     }
@@ -1164,45 +1188,49 @@ export class CastleMeshBuilder {
     // Subtle sheen pulse on stone — premium luster persists through decay
     for (const key of ['primary', 'secondary'] as const) {
       const mat = this.mats[key];
-      if (mat.sheen > 0) {
-        mat.sheen = 0.25 * slowPulse * decayClean;
-      }
-      // Roof-like gentle clearcoat shimmer on walls (Disney polish)
-      if (mat.clearcoat > 0) {
-        mat.clearcoat = 0.35 * gentlePulse * decayClean;
-      }
+      const bp = this.basePaint?.get(key);
+      const baseSheen = bp ? bp.sheen : 0.25;
+      const baseClearcoat = bp ? bp.clearcoat : 0.35;
+
+      mat.sheen = baseSheen * slowPulse * decayClean;
+      mat.clearcoat = baseClearcoat * gentlePulse * decayClean;
+
       // At night: stone walls catch warm inner glow + cool moonlight.
-      // The subtle emissive prevents stone from going dark and adds
-      // the magical "lit from within" quality that makes legendary shine.
-      if (nightFactor > 0.3) {
-        const nightStrength = (nightFactor - 0.3) / 0.7;
-        const stoneNightGlow = nightStrength * 0.10 * decayFade; // stronger (was 0.06)
-        mat.emissiveIntensity = stoneNightGlow;
-        if (mat.emissive.r < 0.01) {
-          // Warm golden stone glow (brighter than before)
-          mat.emissive.setHex(0x504030);
-        }
-        // At deep night, add slight clearcoat boost — moonlight reflections
-        if (nightStrength > 0.5 && mat.clearcoat !== undefined) {
-          mat.clearcoat = Math.max(mat.clearcoat, 0.15 * nightStrength * decayClean);
-        }
-      } else {
-        mat.emissiveIntensity = 0;
+      // SMOOTH transition — no binary jump. Uses smoothstep ramp from 0→0.5.
+      // At nightFactor=0, stoneNightGlow=0 (base emissive from material system).
+      // At nightFactor=0.5+, full night glow. No abrupt zeroing.
+      const nightRamp = Math.min(1, Math.max(0, nightFactor / 0.5)); // smooth 0→1 across nightFactor 0→0.5
+      const nightSmooth = nightRamp * nightRamp * (3 - 2 * nightRamp); // smoothstep
+      const stoneNightGlow = nightSmooth * 0.10 * decayFade;
+
+      // Restore base emissive, then add night contribution
+      const baseEmissiveIntensity = bp ? bp.emissiveIntensity : 0;
+      mat.emissiveIntensity = baseEmissiveIntensity + stoneNightGlow;
+
+      if (nightSmooth > 0.01 && mat.emissive.r < 0.01) {
+        mat.emissive.setHex(0x504030);
+      }
+      // At deep night, boost clearcoat — moonlight reflections
+      if (nightFactor > 0.5 && mat.clearcoat !== undefined) {
+        const moonBoost = (nightFactor - 0.5) / 0.5;
+        mat.clearcoat = Math.max(mat.clearcoat, 0.15 * moonBoost * decayClean);
       }
     }
 
     // Roof material: pulsing emissive + strong night boost.
-    // Golden roofs catching moonlight + warm inner glow = magical.
     const roofNightBoost = nightFactor > 0.2
-      ? 1 + (nightFactor - 0.2) / 0.8 * 2.0  // roof glows 3× at night (was 2.5)
+      ? 1 + (nightFactor - 0.2) / 0.8 * 2.0
       : 1;
+    const roofBp = this.basePaint?.get('roof');
+    const roofBaseEmissive = roofBp ? roofBp.emissiveIntensity : 0.12;
     if (this.mats.roof.emissiveIntensity !== undefined) {
-      this.mats.roof.emissiveIntensity = 0.12 * gentlePulse * decayFade * roofNightBoost;
+      this.mats.roof.emissiveIntensity = roofBaseEmissive * gentlePulse * decayFade * roofNightBoost;
     }
-    // Roof clearcoat shimmer at night — golden roofs catch moonlight
+    // Roof clearcoat shimmer at night
     if (nightFactor > 0.3 && this.mats.roof.clearcoat !== undefined) {
       const moonShimmer = (nightFactor - 0.3) / 0.7;
-      this.mats.roof.clearcoat = Math.max(this.mats.roof.clearcoat, 0.3 * moonShimmer);
+      const roofBaseClearcoat = roofBp ? roofBp.clearcoat : 0.3;
+      this.mats.roof.clearcoat = Math.max(this.mats.roof.clearcoat, roofBaseClearcoat * moonShimmer);
     }
 
     // Bloom halos: emissive-only meshes (no PointLights in bloom group).
@@ -1847,6 +1875,8 @@ export class CastleMeshBuilder {
     this.flagMeshes = [];
 
     if (this.mats) { disposeTierMaterials(this.mats); this.mats = null; }
+    this.basePaint = null;
+    this.graduatedPaintLocked = false;
   }
 
   dispose(): void {

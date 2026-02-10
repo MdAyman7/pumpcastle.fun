@@ -288,6 +288,63 @@ export interface TierMaterials {
   foundation: THREE.MeshStandardMaterial; // bare stone for early construction
 }
 
+// ─── Base Paint Layer ────────────────────────────────────────
+//
+// Authoritative snapshot of material colors/emissive set ONCE per state change.
+// Every frame, decay/construction/effects compute FROM this base — never from
+// the current (already-tinted) material. This prevents cumulative color drift.
+
+export interface BasePaintSnapshot {
+  color: THREE.Color;
+  emissive: THREE.Color;
+  emissiveIntensity: number;
+  roughness: number;
+  metalness: number;
+  clearcoat: number;
+  clearcoatRoughness: number;
+  sheen: number;
+}
+
+export type BasePaintStore = Map<string, BasePaintSnapshot>;
+
+/** Capture base paint from freshly created tier materials. */
+export function snapshotBasePaint(mats: TierMaterials): BasePaintStore {
+  const store: BasePaintStore = new Map();
+  const slots = ['primary', 'secondary', 'roof', 'accent', 'trim', 'glow'] as const;
+  for (const slot of slots) {
+    const mat = mats[slot];
+    store.set(slot, {
+      color: mat.color.clone(),
+      emissive: mat.emissive.clone(),
+      emissiveIntensity: mat.emissiveIntensity,
+      roughness: mat.roughness,
+      metalness: mat.metalness,
+      clearcoat: mat.clearcoat,
+      clearcoatRoughness: mat.clearcoatRoughness,
+      sheen: mat.sheen,
+    });
+  }
+  return store;
+}
+
+/**
+ * Color floor clamp — anti-black failsafe.
+ * Ensures no material color channel drops below a minimum luminance.
+ * Prevents the "everything turns black" failure mode.
+ */
+export function clampColorFloor(color: THREE.Color, minLuminance: number = 0.04): void {
+  const lum = color.r * 0.299 + color.g * 0.587 + color.b * 0.114;
+  if (lum < minLuminance && lum > 0.001) {
+    const boost = minLuminance / lum;
+    color.r = Math.min(1, color.r * boost);
+    color.g = Math.min(1, color.g * boost);
+    color.b = Math.min(1, color.b * boost);
+  } else if (lum <= 0.001) {
+    // Absolute black — lift to minimum visible grey
+    color.setRGB(minLuminance, minLuminance, minLuminance);
+  }
+}
+
 export function createTierMaterials(
   tier: CastleTier,
   quality: MaterialQuality
@@ -690,10 +747,10 @@ const LEGENDARY_DECAY_GREY = new THREE.Color(0x8a7a8a); // warmer, purplish grey
 export function applyDecayToMaterials(
   mats: TierMaterials,
   decay: number,
-  quality: MaterialQuality
+  quality: MaterialQuality,
+  basePaint?: BasePaintStore
 ): void {
   const clampedDecay = Math.max(0, Math.min(1, decay));
-  if (clampedDecay < 0.001) return;
 
   const isLegendary = quality === 'legendary';
   const isHigh = quality === 'high';
@@ -705,61 +762,96 @@ export function applyDecayToMaterials(
 
   const decayGrey = isLegendary ? LEGENDARY_DECAY_GREY : GREY;
 
-  // Stone materials: roughness rises, desaturate, clearcoat degrades
+  // Stone materials: roughness rises, desaturate, clearcoat degrades.
+  // CRITICAL: Always compute FROM base paint, never accumulate.
   for (const key of ['primary', 'secondary', 'roof'] as const) {
     const mat = mats[key];
+    const base = basePaint?.get(key);
+
+    // Restore base color first, then apply decay tint as a computed blend
+    if (base) {
+      mat.color.copy(base.color);
+      mat.roughness = base.roughness;
+      if (isLegendary) mat.metalness = base.metalness;
+    }
+
+    if (clampedDecay < 0.001) continue;
+
     mat.roughness = Math.min(
-      isLegendary ? 0.55 : 1,  // legendary: never rougher than "normal" quality stone
+      isLegendary ? 0.55 : 1,
       mat.roughness + decayImpact * 0.20
     );
+    // Compute from base (or freshly restored) color — not cumulative
     mat.color.lerp(decayGrey, decayImpact * (isLegendary ? 0.10 : 0.20));
 
     if (isLegendary) {
-      // Legendary: metalness never drops below floor — retains premium reflections
       mat.metalness = Math.max(0.10, mat.metalness * (1 - decayImpact * 0.3));
     }
 
     // Clearcoat degrades with decay (surface gets scuffed)
-    if (mat.clearcoat > 0) {
+    const baseClearcoat = base ? base.clearcoat : mat.clearcoat;
+    if (baseClearcoat > 0) {
       mat.clearcoat = Math.max(
-        isLegendary ? 0.10 : 0,  // legendary: always retains some clearcoat
-        mat.clearcoat * (1 - decayImpact * 0.5)
+        isLegendary ? 0.10 : 0,
+        baseClearcoat * (1 - decayImpact * 0.5)
       );
     }
     // Sheen fades
-    if (mat.sheen > 0) {
+    const baseSheen = base ? base.sheen : mat.sheen;
+    if (baseSheen > 0) {
       mat.sheen = Math.max(
-        isLegendary ? 0.05 : 0,  // legendary: ghost of former luster
-        mat.sheen * (1 - decayImpact * 0.4)
+        isLegendary ? 0.05 : 0,
+        baseSheen * (1 - decayImpact * 0.4)
       );
     }
+
+    // Color floor clamp — never let stone go black
+    clampColorFloor(mat.color);
   }
 
-  // Emissive fades — legendary fades slower and keeps a warm residual glow
+  // Emissive fades — compute from base intensity, not cumulative multiply
   for (const key of ['accent', 'trim', 'glow', 'roof'] as const) {
     const mat = mats[key];
-    if (mat.emissiveIntensity > 0) {
+    const base = basePaint?.get(key);
+    const baseIntensity = base ? base.emissiveIntensity : mat.emissiveIntensity;
+    if (base) {
+      mat.emissive.copy(base.emissive);
+    }
+    if (baseIntensity > 0) {
       const fadeFactor = isLegendary
-        ? (1 - clampedDecay * 0.40)   // legendary retains 60% glow even at full decay
+        ? (1 - clampedDecay * 0.40)
         : (1 - clampedDecay * 0.75);
-      mat.emissiveIntensity *= fadeFactor;
+      mat.emissiveIntensity = baseIntensity * fadeFactor;
     }
   }
 
   // Accent/trim: slight desaturation, clearcoat degradation
   for (const key of ['accent', 'trim'] as const) {
     const mat = mats[key];
+    const base = basePaint?.get(key);
+
+    // Restore base color first, then compute decay blend
+    if (base) {
+      mat.color.copy(base.color);
+      if (isLegendary) mat.metalness = base.metalness;
+    }
+
+    if (clampedDecay < 0.001) continue;
+
     mat.color.lerp(decayGrey, decayImpact * (isLegendary ? 0.06 : 0.15));
-    if (mat.clearcoat > 0) {
+    const baseClearcoat = base ? base.clearcoat : mat.clearcoat;
+    if (baseClearcoat > 0) {
       mat.clearcoat = Math.max(
-        isLegendary ? 0.15 : 0, // legendary accents: always a hint of polish
-        mat.clearcoat * (1 - decayImpact * 0.3)
+        isLegendary ? 0.15 : 0,
+        baseClearcoat * (1 - decayImpact * 0.3)
       );
     }
     if (isLegendary) {
-      // Legendary accents: metalness floor — gold never becomes dull stone
       mat.metalness = Math.max(0.30, mat.metalness * (1 - decayImpact * 0.2));
     }
+
+    // Color floor clamp — never let accent/trim go black
+    clampColorFloor(mat.color);
   }
 }
 
@@ -769,33 +861,53 @@ export function applyDecayToMaterials(
  */
 export function applyConstructionToMaterials(
   mats: TierMaterials,
-  progress: number
+  progress: number,
+  basePaint?: BasePaintStore
 ): void {
   if (progress >= 1) return;
 
   const rawness = 1 - progress; // 1 = totally raw, 0 = finished
+  const constructionGrey = new THREE.Color(0x7A7060);
 
   for (const key of ['primary', 'secondary'] as const) {
     const mat = mats[key];
+    const base = basePaint?.get(key);
+
+    // Restore base values first, then compute construction blend
+    if (base) {
+      mat.color.copy(base.color);
+      mat.roughness = base.roughness;
+      mat.metalness = base.metalness;
+      mat.clearcoat = base.clearcoat;
+      mat.sheen = base.sheen;
+    }
+
     mat.roughness = Math.min(1, mat.roughness + rawness * 0.3);
-    mat.color.lerp(new THREE.Color(0x7A7060), rawness * 0.5);
+    mat.color.lerp(constructionGrey, rawness * 0.5);
     mat.metalness *= progress;
-    // Kill clearcoat/sheen during construction
     mat.clearcoat *= progress;
     mat.sheen *= progress;
+
+    // Color floor clamp
+    clampColorFloor(mat.color);
   }
 
   // Trim/accent barely visible until > 60%
   const trimVisibility = Math.max(0, (progress - 0.6) / 0.4);
   for (const key of ['accent', 'trim', 'glow'] as const) {
     const mat = mats[key];
+    const base = basePaint?.get(key);
     mat.opacity = trimVisibility;
     mat.transparent = trimVisibility < 1;
-    if (mat.emissiveIntensity > 0) {
-      mat.emissiveIntensity *= trimVisibility;
+
+    const baseIntensity = base ? base.emissiveIntensity : mat.emissiveIntensity;
+    if (baseIntensity > 0) {
+      mat.emissiveIntensity = baseIntensity * trimVisibility;
     }
-    mat.clearcoat *= trimVisibility;
-    mat.sheen *= trimVisibility;
+    const baseClearcoat = base ? base.clearcoat : mat.clearcoat;
+    mat.clearcoat = baseClearcoat * trimVisibility;
+    const baseSheen = base ? base.sheen : mat.sheen;
+    mat.sheen = baseSheen * trimVisibility;
   }
 }
 
