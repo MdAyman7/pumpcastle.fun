@@ -22,6 +22,8 @@ export interface QualityConfig {
   maxRain: number;               // weather rain particles
   maxSnow: number;               // weather snow particles
   maxHaze: number;               // heat haze particles
+  maxSplash: number;             // rain splash particles
+  maxSpray: number;              // storm spray mist particles
   maxSmoke: number;              // chimney smoke particles
   maxEffectParticles: number;    // EffectsManager particles
 
@@ -54,9 +56,11 @@ const QUALITY_PRESETS: Record<QualityLevel, QualityConfig> = {
     shadowMapSize: 512,
     shadowsEnabled: false,
     shadowCameraRange: 20,
-    maxRain: 80,
+    maxRain: 200,
     maxSnow: 50,
     maxHaze: 10,
+    maxSplash: 40,
+    maxSpray: 20,
     maxSmoke: 15,
     maxEffectParticles: 200,
     skyUpdateInterval: 6,
@@ -75,9 +79,11 @@ const QUALITY_PRESETS: Record<QualityLevel, QualityConfig> = {
     shadowMapSize: 1024,
     shadowsEnabled: true,
     shadowCameraRange: 25,
-    maxRain: 150,
+    maxRain: 500,
     maxSnow: 100,
     maxHaze: 20,
+    maxSplash: 120,
+    maxSpray: 60,
     maxSmoke: 30,
     maxEffectParticles: 350,
     skyUpdateInterval: 3,
@@ -96,9 +102,11 @@ const QUALITY_PRESETS: Record<QualityLevel, QualityConfig> = {
     shadowMapSize: 2048,
     shadowsEnabled: true,
     shadowCameraRange: 35,
-    maxRain: 300,
+    maxRain: 1000,
     maxSnow: 200,
     maxHaze: 40,
+    maxSplash: 250,
+    maxSpray: 120,
     maxSmoke: 60,
     maxEffectParticles: 500,
     skyUpdateInterval: 1,
