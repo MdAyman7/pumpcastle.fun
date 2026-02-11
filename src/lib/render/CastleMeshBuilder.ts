@@ -283,10 +283,18 @@ export class CastleMeshBuilder {
 
     // Build geometry based on tier + progress
     switch (state.tier) {
-      case 'keep':    this.buildKeep(state, progress); break;
-      case 'castle':  this.buildCastle_Tier(state, progress); break;
-      case 'fortress': this.buildFortress(state, progress); break;
-      case 'citadel': this.buildCitadel(state, progress); break;
+      case 'hut':        this.buildHut(state, progress); break;
+      case 'cottage':    this.buildCottage(state, progress); break;
+      case 'tower':      this.buildTower(state, progress); break;
+      case 'keep':       this.buildKeep(state, progress); break;
+      case 'manor':      this.buildManor(state, progress); break;
+      case 'castle':     this.buildCastle_Tier(state, progress); break;
+      case 'stronghold': this.buildStronghold(state, progress); break;
+      case 'fortress':   this.buildFortress(state, progress); break;
+      case 'palace':     this.buildPalace(state, progress); break;
+      case 'citadel':    this.buildCitadel(state, progress); break;
+      case 'empire':     this.buildEmpire(state, progress); break;
+      case 'legend':     this.buildLegend(state, progress); break;
     }
 
     // Apply tier-scaled color gradients to castle geometry.
@@ -323,7 +331,7 @@ export class CastleMeshBuilder {
     const foundMat = this.mats.foundation;
 
     // Ground marking: flat stone rectangle showing footprint
-    const footprintSize = state.tier === 'keep' ? 5 : state.tier === 'castle' ? 12 : state.tier === 'fortress' ? 18 : 26;
+    const footprintSize = state.tier === 'hut' ? 3 : state.tier === 'cottage' ? 4 : state.tier === 'tower' ? 3 : state.tier === 'keep' ? 5 : state.tier === 'manor' ? 8 : state.tier === 'castle' ? 12 : state.tier === 'stronghold' ? 15 : state.tier === 'fortress' ? 18 : state.tier === 'palace' ? 22 : state.tier === 'citadel' ? 26 : state.tier === 'empire' ? 30 : 34;
     const marker = this.createBox(footprintSize, 0.08, footprintSize, foundMat);
     marker.position.y = 0.04;
     this.constructionGroup.add(marker);
@@ -372,7 +380,191 @@ export class CastleMeshBuilder {
     }
   }
 
-  // ─── Keep (< 1M ATH) ─────────────────────────────────────
+  // ─── Hut (pre-graduation) ────────────────────────────────
+
+  private buildHut(state: RenderState, progress: number): void {
+    if (!this.mats) return;
+    const m = this.mats;
+
+    // Phase 1: Foundation pad (0-20%)
+    if (progress >= 0.05) {
+      const fh = 0.3 * Math.min(1, progress / 0.2);
+      const base = this.createBox(2.5, fh, 2.5, m.foundation);
+      base.position.y = fh / 2;
+      this.castleGroup.add(base);
+    }
+
+    // Phase 2: Mud walls (20-50%)
+    if (progress >= 0.2) {
+      const wallP = Math.min(1, (progress - 0.2) / 0.3);
+      const wallH = 2.5 * wallP;
+      if (wallH > 0.2) {
+        const walls = this.createBox(2, wallH, 2, m.primary);
+        walls.position.y = wallH / 2 + 0.3;
+        this.castleGroup.add(walls);
+      }
+    }
+
+    // Phase 3: Door opening (40-60%)
+    if (progress >= 0.4) {
+      const doorFrame = this.createBox(0.6, 1.4, 0.15, m.wood);
+      doorFrame.position.set(0, 1, 1.05);
+      this.castleGroup.add(doorFrame);
+    }
+
+    // Phase 4: Thatched roof (60-85%)
+    if (progress >= 0.6) {
+      const roofP = Math.min(1, (progress - 0.6) / 0.25);
+      if (roofP > 0) {
+        const roof = this.createCone(1.8, 1.8 * roofP, 4, m.roof);
+        roof.position.y = 2.8 + 0.9 * roofP;
+        this.castleGroup.add(roof);
+      }
+    }
+
+    // Phase 5: Details + flag at 100%
+    if (progress >= 0.85) {
+      this.addTorch(1.2, 1.5, 1.2);
+    }
+    if (progress >= 1) {
+      this.addFlag(0, 4.8, 0, state.tier);
+    }
+  }
+
+  // ─── Cottage (graduated → 200K) ────────────────────────────
+
+  private buildCottage(state: RenderState, progress: number): void {
+    if (!this.mats) return;
+    const m = this.mats;
+
+    // Phase 1: Stone foundation (0-20%)
+    if (progress >= 0.05) {
+      const fh = 0.4 * Math.min(1, progress / 0.2);
+      const base = this.createBox(3.5, fh, 3, m.foundation);
+      base.position.y = fh / 2;
+      this.castleGroup.add(base);
+    }
+
+    // Phase 2: Stone walls (20-50%)
+    if (progress >= 0.2) {
+      const wallP = Math.min(1, (progress - 0.2) / 0.3);
+      const wallH = 3 * wallP;
+      if (wallH > 0.2) {
+        const walls = this.createBox(3, wallH, 2.5, m.primary);
+        walls.position.y = wallH / 2 + 0.4;
+        this.castleGroup.add(walls);
+      }
+    }
+
+    // Phase 3: Door + window (40-60%)
+    if (progress >= 0.4) {
+      const doorFrame = this.createBox(0.8, 1.6, 0.2, m.accent);
+      doorFrame.position.set(0, 1.2, 1.3);
+      this.castleGroup.add(doorFrame);
+
+      const door = this.createBox(0.6, 1.4, 0.12, m.wood);
+      door.position.set(0, 1.1, 1.38);
+      this.castleGroup.add(door);
+
+      // Small window
+      const win = this.createBox(0.5, 0.5, 0.15, m.accent);
+      win.position.set(1.0, 2.2, 1.3);
+      this.castleGroup.add(win);
+    }
+
+    // Phase 4: Thatched roof + chimney (60-85%)
+    if (progress >= 0.6) {
+      const roofP = Math.min(1, (progress - 0.6) / 0.25);
+      if (roofP > 0) {
+        const roof = this.createCone(2.5, 2 * roofP, 4, m.roof);
+        roof.position.y = 3.4 + roofP;
+        this.castleGroup.add(roof);
+
+        // Chimney
+        if (roofP >= 0.6) {
+          const chimney = this.createBox(0.4, 1.5, 0.4, m.secondary);
+          chimney.position.set(-1, 4, -0.5);
+          this.castleGroup.add(chimney);
+        }
+      }
+    }
+
+    // Phase 5: Details + flag
+    if (progress >= 0.85) {
+      this.addTorch(1.6, 1.8, 1.4);
+    }
+    if (progress >= 1) {
+      this.addFlag(0, 5.8, 0, state.tier);
+    }
+  }
+
+  // ─── Tower (200K → 500K) ───────────────────────────────────
+
+  private buildTower(state: RenderState, progress: number): void {
+    if (!this.mats) return;
+    const m = this.mats;
+
+    // Phase 1: Circular foundation (0-15%)
+    if (progress >= 0.05) {
+      const fh = 0.4 * Math.min(1, progress / 0.15);
+      const base = this.createCylinder(2, 2, fh, 12, m.foundation);
+      base.position.y = fh / 2;
+      this.castleGroup.add(base);
+    }
+
+    // Phase 2: Cylindrical tower body (15-55%)
+    if (progress >= 0.15) {
+      const wallP = Math.min(1, (progress - 0.15) / 0.4);
+      const towerH = 7 * wallP;
+      if (towerH > 0.5) {
+        const tower = this.createCylinder(1.5, 1.5, towerH, 12, m.primary);
+        tower.position.y = towerH / 2 + 0.4;
+        this.castleGroup.add(tower);
+
+        // Stone band details
+        if (wallP >= 0.6) {
+          const band = this.createCylinder(1.6, 1.6, 0.25, 12, m.accent);
+          band.position.y = towerH * 0.5;
+          this.castleGroup.add(band);
+        }
+      }
+    }
+
+    // Phase 3: Arrow slit + door (45-65%)
+    if (progress >= 0.45) {
+      // Arrow slit (narrow window)
+      const slit = this.createBox(0.15, 0.8, 0.2, m.accent);
+      slit.position.set(0, 4.5, 1.55);
+      this.castleGroup.add(slit);
+
+      // Door
+      const door = this.createBox(0.7, 1.5, 0.15, m.wood);
+      door.position.set(0, 1.15, 1.55);
+      this.castleGroup.add(door);
+    }
+
+    // Phase 4: Battlements + pointed roof (60-85%)
+    if (progress >= 0.6) {
+      this.addBattlementsCircular(0, 7.4, 0, 1.5, 8, m.secondary);
+
+      const roofP = Math.min(1, (progress - 0.6) / 0.25);
+      if (roofP > 0) {
+        const roof = this.createCone(2, 2.5 * roofP, 8, m.roof);
+        roof.position.y = 7.4 + 1.25 * roofP;
+        this.castleGroup.add(roof);
+      }
+    }
+
+    // Phase 5: Torch + flag
+    if (progress >= 0.8) {
+      this.addTorch(1.6, 2.5, 1.0);
+    }
+    if (progress >= 1) {
+      this.addFlag(0, 10.5, 0, state.tier);
+    }
+  }
+
+  // ─── Keep (500K → 1M) ──────────────────────────────────────
 
   private buildKeep(state: RenderState, progress: number): void {
     if (!this.mats) return;
@@ -452,7 +644,111 @@ export class CastleMeshBuilder {
     }
   }
 
-  // ─── Castle (1M-10M ATH) ──────────────────────────────────
+  // ─── Manor (1M → 2M) ───────────────────────────────────────
+
+  private buildManor(state: RenderState, progress: number): void {
+    if (!this.mats) return;
+    const m = this.mats;
+
+    // Phase 1: Foundation (0-15%)
+    if (progress >= 0.05) {
+      const fh = 0.4 * Math.min(1, progress / 0.15);
+      const base = this.createBox(8, fh, 6, m.foundation);
+      base.position.y = fh / 2;
+      this.castleGroup.add(base);
+    }
+
+    // Phase 2: Main hall + wing (15-45%)
+    if (progress >= 0.15) {
+      const wallP = Math.min(1, (progress - 0.15) / 0.3);
+      const wallH = 4 * wallP;
+
+      if (wallH > 0.3) {
+        // Main hall (wider section)
+        const hall = this.createBox(5, wallH, 4, m.primary);
+        hall.position.set(-0.5, wallH / 2 + 0.4, 0);
+        this.castleGroup.add(hall);
+
+        // L-shaped wing
+        const wing = this.createBox(3, wallH * 0.85, 3, m.primary);
+        wing.position.set(3, (wallH * 0.85) / 2 + 0.4, -1.5);
+        this.castleGroup.add(wing);
+      }
+    }
+
+    // Phase 3: Windows + door (40-60%)
+    if (progress >= 0.4) {
+      // Main entrance
+      const doorFrame = this.createBox(1, 2, 0.25, m.accent);
+      doorFrame.position.set(-0.5, 1.4, 2.05);
+      this.castleGroup.add(doorFrame);
+
+      const door = this.createBox(0.8, 1.8, 0.15, m.wood);
+      door.position.set(-0.5, 1.3, 2.15);
+      this.castleGroup.add(door);
+
+      // Windows along hall
+      for (let i = -1; i <= 1; i++) {
+        const win = this.createBox(0.5, 0.7, 0.15, m.accent);
+        win.position.set(-0.5 + i * 1.5, 3, 2.05);
+        this.castleGroup.add(win);
+      }
+
+      // Wing window
+      const wingWin = this.createBox(0.5, 0.7, 0.15, m.accent);
+      wingWin.position.set(3, 2.8, -3.05);
+      this.castleGroup.add(wingWin);
+    }
+
+    // Phase 4: Pitched roofs (55-80%)
+    if (progress >= 0.55) {
+      const roofP = Math.min(1, (progress - 0.55) / 0.25);
+      if (roofP > 0) {
+        // Main hall pitched roof
+        const mainRoof = this.createCone(3.8, 2.5 * roofP, 4, m.roof);
+        mainRoof.position.set(-0.5, 4.4 + 1.25 * roofP, 0);
+        this.castleGroup.add(mainRoof);
+
+        // Wing roof
+        const wingRoof = this.createCone(2.5, 2 * roofP, 4, m.roof);
+        wingRoof.position.set(3, 3.8 + roofP, -1.5);
+        this.castleGroup.add(wingRoof);
+      }
+    }
+
+    // Phase 5: Garden wall (70-90%)
+    if (progress >= 0.7) {
+      const gwP = Math.min(1, (progress - 0.7) / 0.2);
+      const gwH = 1.5 * gwP;
+      if (gwH > 0.2) {
+        // Front garden wall
+        const frontWall = this.createBox(8, gwH, 0.3, m.secondary);
+        frontWall.position.set(0, gwH / 2, 3.5);
+        this.castleGroup.add(frontWall);
+
+        // Side walls
+        const leftWall = this.createBox(0.3, gwH, 2, m.secondary);
+        leftWall.position.set(-4, gwH / 2, 2.5);
+        this.castleGroup.add(leftWall);
+
+        const rightWall = this.createBox(0.3, gwH, 2, m.secondary);
+        rightWall.position.set(4, gwH / 2, 2.5);
+        this.castleGroup.add(rightWall);
+      }
+    }
+
+    // Details + flags
+    if (progress >= 0.8) {
+      this.addTorch(-2.5, 2.5, 2.1);
+      this.addTorch(1.5, 2.5, 2.1);
+    }
+    if (progress >= 1) {
+      this.addFlag(-0.5, 7.5, 0, state.tier);
+      this.addFlag(3, 6.5, -1.5, state.tier);
+    }
+  }
+
+  // ─── Castle (2M → 5M) ─────────────────────────────────────
 
   private buildCastle_Tier(state: RenderState, progress: number): void {
     if (!this.mats) return;
@@ -573,7 +869,151 @@ export class CastleMeshBuilder {
     }
   }
 
-  // ─── Fortress (10M-100M ATH) ──────────────────────────────
+  // ─── Stronghold (5M → 10M) ─────────────────────────────────
+
+  private buildStronghold(state: RenderState, progress: number): void {
+    if (!this.mats) return;
+    const m = this.mats;
+    const outerRadius = 7;
+    const innerRadius = 4;
+
+    // Phase 1: Foundation (0-15%)
+    if (progress >= 0.05) {
+      const fh = 0.35 * Math.min(1, progress / 0.15);
+      const ring = this.createCylinder(outerRadius + 0.5, outerRadius + 0.5, fh, 20, m.foundation);
+      ring.position.y = fh / 2;
+      this.castleGroup.add(ring);
+    }
+
+    // Phase 2: Double walls (15-45%)
+    if (progress >= 0.15) {
+      const wallP = Math.min(1, (progress - 0.15) / 0.3);
+      // Outer wall (thick)
+      const outerH = 4 * wallP;
+      if (outerH > 0.3) {
+        this.addCurtainWall(outerRadius, outerH, 12, m.primary);
+      }
+      // Inner wall (taller)
+      if (wallP > 0.5) {
+        const innerP = Math.min(1, (wallP - 0.5) / 0.5);
+        const innerH = 5 * innerP;
+        if (innerH > 0.3) {
+          this.addCurtainWall(innerRadius, innerH, 8, m.secondary);
+        }
+      }
+    }
+
+    // Phase 3: 6 outer towers (35-65%)
+    if (progress >= 0.35) {
+      const towerP = Math.min(1, (progress - 0.35) / 0.3);
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * Math.PI * 2;
+        const x = Math.cos(angle) * outerRadius;
+        const z = Math.sin(angle) * outerRadius;
+        const tH = 6 * towerP;
+        if (tH > 0.5) {
+          const tower = this.createCylinder(1.2, 1.2, tH, 8, m.primary);
+          tower.position.set(x, tH / 2, z);
+          this.castleGroup.add(tower);
+
+          if (towerP >= 0.85) {
+            const band = this.createCylinder(1.3, 1.3, 0.3, 8, m.accent);
+            band.position.set(x, tH - 0.4, z);
+            this.castleGroup.add(band);
+
+            const towerRoof = this.createCone(1.6, 2, 8, m.roof);
+            towerRoof.position.set(x, tH + 1, z);
+            this.castleGroup.add(towerRoof);
+
+            this.addBattlementsCircular(x, tH, z, 1.2, 8, m.secondary);
+          }
+        }
+      }
+    }
+
+    // Phase 4: Gatehouse + inner keep (55-85%)
+    if (progress >= 0.55) {
+      // Gatehouse — twin towers flanking gate
+      const gateP = Math.min(1, (progress - 0.55) / 0.2);
+      const gateH = 5 * gateP;
+      if (gateH > 0.5) {
+        const gateL = this.createCylinder(1.0, 1.0, gateH, 8, m.primary);
+        gateL.position.set(-1.8, gateH / 2, outerRadius);
+        this.castleGroup.add(gateL);
+
+        const gateR = this.createCylinder(1.0, 1.0, gateH, 8, m.primary);
+        gateR.position.set(1.8, gateH / 2, outerRadius);
+        this.castleGroup.add(gateR);
+
+        // Bridge between gatehouse towers
+        if (gateP >= 0.7) {
+          const bridge = this.createBox(3.6, 0.6, 1.2, m.secondary);
+          bridge.position.set(0, gateH - 0.3, outerRadius);
+          this.castleGroup.add(bridge);
+        }
+
+        if (gateP >= 0.85) {
+          const roofL = this.createCone(1.3, 1.5, 8, m.roof);
+          roofL.position.set(-1.8, gateH + 0.75, outerRadius);
+          this.castleGroup.add(roofL);
+
+          const roofR = this.createCone(1.3, 1.5, 8, m.roof);
+          roofR.position.set(1.8, gateH + 0.75, outerRadius);
+          this.castleGroup.add(roofR);
+        }
+      }
+
+      // Inner keep
+      if (progress >= 0.65) {
+        const keepP = Math.min(1, (progress - 0.65) / 0.2);
+        const keepH = 7 * keepP;
+        if (keepH > 0.5) {
+          const keep = this.createBox(4, keepH, 4, m.primary);
+          keep.position.set(0, keepH / 2, 0);
+          this.castleGroup.add(keep);
+
+          if (keepP >= 0.8) {
+            const keepBand = this.createBox(4.2, 0.3, 4.2, m.accent);
+            keepBand.position.set(0, keepH - 0.5, 0);
+            this.castleGroup.add(keepBand);
+          }
+
+          if (keepP >= 0.95) {
+            const keepRoof = this.createCone(3.2, 2.5, 4, m.roof);
+            keepRoof.position.set(0, keepH + 1.25, 0);
+            this.castleGroup.add(keepRoof);
+          }
+        }
+      }
+    }
+
+    // Gate
+    if (progress >= 0.5) {
+      this.addGate(0, 0, outerRadius + 0.5, 1.2, m.accent);
+    }
+
+    // Torches
+    if (progress >= 0.7) {
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * Math.PI * 2 + Math.PI / 6;
+        this.addTorch(Math.cos(angle) * 5.5, 3, Math.sin(angle) * 5.5);
+      }
+    }
+
+    // Flags at 100%
+    if (progress >= 1) {
+      this.addFlag(0, 10, 0, state.tier);
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * Math.PI * 2;
+        this.addFlag(
+          Math.cos(angle) * outerRadius, 8.5,
+          Math.sin(angle) * outerRadius, state.tier
+        );
+      }
+    }
+  }
+
+  // ─── Fortress (10M → 50M) ─────────────────────────────────
 
   private buildFortress(state: RenderState, progress: number): void {
     if (!this.mats) return;
@@ -717,7 +1157,152 @@ export class CastleMeshBuilder {
     }
   }
 
-  // ─── Citadel (> 100M ATH) — Disney legendary ─────────────
+  // ─── Palace (50M → 100M) ───────────────────────────────────
+
+  private buildPalace(state: RenderState, progress: number): void {
+    if (!this.mats) return;
+    const m = this.mats;
+    const outerRadius = 10;
+
+    // Phase 1: Grand foundation (0-15%)
+    if (progress >= 0.05) {
+      const fh = 0.5 * Math.min(1, progress / 0.15);
+      const ring = this.createCylinder(outerRadius + 1, outerRadius + 1, fh, 28, m.foundation);
+      ring.position.y = fh / 2;
+      this.castleGroup.add(ring);
+    }
+
+    // Phase 2: Elegant outer wall (15-40%)
+    if (progress >= 0.15) {
+      const wallP = Math.min(1, (progress - 0.15) / 0.25);
+      const wallH = 4.5 * wallP;
+      if (wallH > 0.3) {
+        this.addCurtainWall(outerRadius, wallH, 16, m.primary);
+
+        // Decorative trim at top
+        if (wallP >= 0.9) {
+          const trim = this.createTorus(outerRadius, 0.18, 8, 28, m.accent);
+          trim.position.y = wallH;
+          trim.rotation.x = Math.PI / 2;
+          this.castleGroup.add(trim);
+        }
+      }
+    }
+
+    // Phase 3: Symmetric decorative towers (35-65%)
+    if (progress >= 0.35) {
+      const towerP = Math.min(1, (progress - 0.35) / 0.3);
+      // 8 elegant spire towers symmetrically placed
+      for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI * 2;
+        const x = Math.cos(angle) * outerRadius;
+        const z = Math.sin(angle) * outerRadius;
+        const tH = 8 * towerP;
+        if (tH > 0.5) {
+          const tower = this.createCylinder(1.2, 1.2, tH, 10, m.primary);
+          tower.position.set(x, tH / 2, z);
+          this.castleGroup.add(tower);
+
+          if (towerP >= 0.8) {
+            // Decorative band
+            const band = this.createCylinder(1.35, 1.35, 0.35, 10, m.accent);
+            band.position.set(x, tH - 0.5, z);
+            this.castleGroup.add(band);
+
+            // Elegant pointed spire (taller and thinner than fortress)
+            const spire = this.createCone(1.5, 3.5, 10, m.roof);
+            spire.position.set(x, tH + 1.75, z);
+            this.castleGroup.add(spire);
+
+            // Decorative finial
+            const finial = this.createCone(0.3, 1, 8, m.accent);
+            finial.position.set(x, tH + 4, z);
+            this.castleGroup.add(finial);
+          }
+        }
+      }
+    }
+
+    // Phase 4: Grand central palace + inner ring (50-80%)
+    if (progress >= 0.5) {
+      const centralP = Math.min(1, (progress - 0.5) / 0.3);
+      const centralH = 10 * centralP;
+
+      if (centralH > 1) {
+        // Central palace body — rectangular elegance
+        const palace = this.createBox(6, centralH, 6, m.primary);
+        palace.position.set(0, centralH / 2, 0);
+        this.castleGroup.add(palace);
+
+        // Decorative bands
+        if (centralP >= 0.5) {
+          for (let i = 0; i < 4; i++) {
+            const band = this.createBox(6.3, 0.25, 6.3, m.accent);
+            band.position.set(0, 1.5 + i * 2.5, 0);
+            this.castleGroup.add(band);
+          }
+        }
+
+        // Grand dome/spire on top
+        if (centralP >= 0.9) {
+          const dome = this.createCone(4.5, 4, 12, m.roof);
+          dome.position.set(0, centralH + 2, 0);
+          this.castleGroup.add(dome);
+
+          const spire = this.createCone(0.6, 2.5, 8, m.accent);
+          spire.position.set(0, centralH + 5.5, 0);
+          this.castleGroup.add(spire);
+        }
+      }
+
+      // 4 inner decorative towers
+      if (progress >= 0.6) {
+        const itP = Math.min(1, (progress - 0.6) / 0.2);
+        const innerPos = [[4, 4], [-4, 4], [-4, -4], [4, -4]];
+        for (const [x, z] of innerPos) {
+          const itH = 11 * itP;
+          if (itH > 0.5) {
+            const tower = this.createCylinder(1.0, 1.0, itH, 10, m.secondary);
+            tower.position.set(x, itH / 2, z);
+            this.castleGroup.add(tower);
+
+            if (itP >= 0.85) {
+              const towerRoof = this.createCone(1.4, 3, 10, m.roof);
+              towerRoof.position.set(x, itH + 1.5, z);
+              this.castleGroup.add(towerRoof);
+            }
+          }
+        }
+      }
+    }
+
+    // Gate
+    if (progress >= 0.5) {
+      this.addGate(0, 0, outerRadius + 0.5, 1.8, m.accent);
+    }
+
+    // Torches
+    if (progress >= 0.75) {
+      for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI * 2 + Math.PI / 8;
+        this.addTorch(Math.cos(angle) * 7, 3, Math.sin(angle) * 7);
+      }
+    }
+
+    // Flags at 100%
+    if (progress >= 1) {
+      this.addFlag(0, 17, 0, state.tier);
+      for (let i = 0; i < 4; i++) {
+        const angle = (i / 4) * Math.PI * 2 + Math.PI / 4;
+        this.addFlag(
+          Math.cos(angle) * outerRadius, 12,
+          Math.sin(angle) * outerRadius, state.tier
+        );
+      }
+    }
+  }
+
+  // ─── Citadel (100M → 500M) — Disney legendary ─────────────
 
   private buildCitadel(state: RenderState, progress: number): void {
     if (!this.mats) return;
@@ -890,6 +1475,398 @@ export class CastleMeshBuilder {
       for (let i = 0; i < numTowers; i++) {
         const angle = (i / numTowers) * Math.PI * 2;
         this.addFlag(Math.cos(angle) * 4, 17, Math.sin(angle) * 4, state.tier);
+      }
+    }
+  }
+
+  // ─── Empire (500M → 1B) ────────────────────────────────────
+
+  private buildEmpire(state: RenderState, progress: number): void {
+    if (!this.mats) return;
+    const m = this.mats;
+    const outerRadius = 14;
+
+    // Phase 1: Massive foundation (0-12%)
+    if (progress >= 0.05) {
+      const fh = 0.5 * Math.min(1, progress / 0.12);
+      const ring = this.createCylinder(outerRadius + 1.5, outerRadius + 1.5, fh, 36, m.foundation);
+      ring.position.y = fh / 2;
+      this.castleGroup.add(ring);
+    }
+
+    // Phase 2: Triple concentric walls (12-40%)
+    if (progress >= 0.12) {
+      const wallP = Math.min(1, (progress - 0.12) / 0.28);
+      // Outer wall
+      const outerH = 5 * wallP;
+      if (outerH > 0.3) this.addCurtainWall(outerRadius, outerH, 16, m.primary);
+
+      // Middle wall
+      if (wallP > 0.35) {
+        const midP = Math.min(1, (wallP - 0.35) / 0.65);
+        const midH = 6 * midP;
+        if (midH > 0.3) this.addCurtainWall(9, midH, 12, m.secondary);
+      }
+
+      // Inner wall
+      if (wallP > 0.65) {
+        const innerP = Math.min(1, (wallP - 0.65) / 0.35);
+        const innerH = 7 * innerP;
+        if (innerH > 0.3) this.addCurtainWall(5.5, innerH, 10, m.primary);
+      }
+
+      // Trim rings
+      if (wallP >= 0.95) {
+        for (const r of [outerRadius, 9, 5.5]) {
+          const trim = this.createTorus(r, 0.2, 8, 32, m.accent);
+          trim.position.y = r === outerRadius ? 5 : (r === 9 ? 6 : 7);
+          trim.rotation.x = Math.PI / 2;
+          this.castleGroup.add(trim);
+        }
+      }
+    }
+
+    // Phase 3: 12 outer towers (30-60%)
+    if (progress >= 0.3) {
+      const towerP = Math.min(1, (progress - 0.3) / 0.3);
+      for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * Math.PI * 2;
+        const x = Math.cos(angle) * outerRadius;
+        const z = Math.sin(angle) * outerRadius;
+        const tH = 8 * towerP;
+        if (tH > 0.5) {
+          const tower = this.createCylinder(1.4, 1.4, tH, 8, m.primary);
+          tower.position.set(x, tH / 2, z);
+          this.castleGroup.add(tower);
+
+          if (towerP >= 0.85) {
+            const band = this.createCylinder(1.5, 1.5, 0.35, 8, m.accent);
+            band.position.set(x, tH - 0.5, z);
+            this.castleGroup.add(band);
+
+            const towerRoof = this.createCone(1.9, 2.5, 8, m.roof);
+            towerRoof.position.set(x, tH + 1.25, z);
+            this.castleGroup.add(towerRoof);
+          }
+        }
+      }
+    }
+
+    // Phase 4: Massive central tower + baileys (45-80%)
+    if (progress >= 0.45) {
+      const centralP = Math.min(1, (progress - 0.45) / 0.35);
+      const centralH = 18 * centralP;
+
+      if (centralH > 1) {
+        const centralTower = this.createCylinder(3.5, 3.5, centralH, 12, m.primary);
+        centralTower.position.set(0, centralH / 2, 0);
+        this.castleGroup.add(centralTower);
+
+        // Gold bands
+        if (centralP >= 0.5) {
+          const bandCount = Math.min(6, Math.floor(centralP * 7));
+          for (let i = 0; i < bandCount; i++) {
+            const band = this.createCylinder(3.7, 3.7, 0.4, 12, m.accent);
+            band.position.set(0, 2 + i * 3, 0);
+            this.castleGroup.add(band);
+          }
+        }
+
+        // Grand roof
+        if (centralP >= 0.9) {
+          const centralRoof = this.createCone(5, 5, 12, m.roof);
+          centralRoof.position.set(0, centralH + 2.5, 0);
+          this.castleGroup.add(centralRoof);
+
+          const spire = this.createCone(0.8, 3, 8, m.glow);
+          spire.position.set(0, centralH + 6.5, 0);
+          this.castleGroup.add(spire);
+
+          this.addBloomHalo(0, centralH + 8, 0, 1.8);
+        }
+      }
+
+      // 6 inner bailey towers
+      if (progress >= 0.55) {
+        const itP = Math.min(1, (progress - 0.55) / 0.25);
+        for (let i = 0; i < 6; i++) {
+          const angle = (i / 6) * Math.PI * 2;
+          const x = Math.cos(angle) * 5;
+          const z = Math.sin(angle) * 5;
+          const itH = 14 * itP;
+          if (itH > 1) {
+            const tower = this.createCylinder(1.5, 1.5, itH, 8, m.secondary);
+            tower.position.set(x, itH / 2, z);
+            this.castleGroup.add(tower);
+
+            if (itP >= 0.85) {
+              const towerRoof = this.createCone(2, 3, 8, m.roof);
+              towerRoof.position.set(x, itH + 1.5, z);
+              this.castleGroup.add(towerRoof);
+
+              const tip = this.createCone(0.35, 1, 6, m.accent);
+              tip.position.set(x, itH + 3.5, z);
+              this.castleGroup.add(tip);
+            }
+
+            // Sky bridges between adjacent inner towers
+            if (itP >= 0.9 && i < 5) {
+              const nextAngle = ((i + 1) / 6) * Math.PI * 2;
+              const nx = Math.cos(nextAngle) * 5;
+              const nz = Math.sin(nextAngle) * 5;
+              const bridgeLen = Math.sqrt((nx - x) ** 2 + (nz - z) ** 2);
+              const bridge = this.createBox(0.8, 0.3, bridgeLen * 0.9, m.primary);
+              bridge.position.set((x + nx) / 2, 10, (z + nz) / 2);
+              bridge.lookAt(new THREE.Vector3(nx, 10, nz));
+              this.castleGroup.add(bridge);
+            }
+          }
+        }
+      }
+    }
+
+    // Gate
+    if (progress >= 0.5) {
+      this.addGate(0, 0, outerRadius + 0.5, 2, m.accent);
+    }
+
+    // Torches
+    if (progress >= 0.7) {
+      for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * Math.PI * 2;
+        this.addTorch(Math.cos(angle) * 7, 3.5, Math.sin(angle) * 7);
+      }
+    }
+
+    // Flags at 100%
+    if (progress >= 1) {
+      this.addFlag(0, 27, 0, state.tier);
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * Math.PI * 2;
+        this.addFlag(
+          Math.cos(angle) * 5, 18,
+          Math.sin(angle) * 5, state.tier
+        );
+      }
+      for (let i = 0; i < 4; i++) {
+        const angle = (i / 4) * Math.PI * 2;
+        this.addFlag(
+          Math.cos(angle) * outerRadius, 11,
+          Math.sin(angle) * outerRadius, state.tier
+        );
+      }
+    }
+  }
+
+  // ─── Legend (1B+) — Mythic legendary fortress ──────────────
+
+  private buildLegend(state: RenderState, progress: number): void {
+    if (!this.mats) return;
+    const m = this.mats;
+    const outerRadius = 16;
+
+    // Phase 1: Crystalline foundation (0-12%)
+    if (progress >= 0.05) {
+      const fh = 0.6 * Math.min(1, progress / 0.12);
+      const ring = this.createCylinder(outerRadius + 2, outerRadius + 2, fh, 36, m.foundation);
+      ring.position.y = fh / 2;
+      this.castleGroup.add(ring);
+
+      // Glowing foundation ring
+      if (fh > 0.3) {
+        const glowRing = this.createTorus(outerRadius + 1, 0.15, 8, 36, m.glow);
+        glowRing.position.y = fh;
+        glowRing.rotation.x = Math.PI / 2;
+        this.castleGroup.add(glowRing);
+      }
+    }
+
+    // Phase 2: Quadruple walls with glow accents (10-40%)
+    if (progress >= 0.1) {
+      const wallP = Math.min(1, (progress - 0.1) / 0.3);
+      // Outer wall
+      const outerH = 6 * wallP;
+      if (outerH > 0.3) this.addCurtainWall(outerRadius, outerH, 20, m.primary);
+      // Second wall
+      if (wallP > 0.25) {
+        const w2P = Math.min(1, (wallP - 0.25) / 0.75);
+        if (7 * w2P > 0.3) this.addCurtainWall(11, 7 * w2P, 16, m.secondary);
+      }
+      // Third wall
+      if (wallP > 0.5) {
+        const w3P = Math.min(1, (wallP - 0.5) / 0.5);
+        if (8 * w3P > 0.3) this.addCurtainWall(7, 8 * w3P, 12, m.primary);
+      }
+      // Inner wall
+      if (wallP > 0.75) {
+        const w4P = Math.min(1, (wallP - 0.75) / 0.25);
+        if (9 * w4P > 0.3) this.addCurtainWall(4, 9 * w4P, 8, m.secondary);
+      }
+
+      // Glow trim rings
+      if (wallP >= 0.95) {
+        for (const [r, h] of [[outerRadius, 6], [11, 7], [7, 8], [4, 9]] as const) {
+          const trim = this.createTorus(r, 0.2, 8, 32, m.glow);
+          trim.position.y = h;
+          trim.rotation.x = Math.PI / 2;
+          this.castleGroup.add(trim);
+        }
+      }
+    }
+
+    // Phase 3: Crystalline spire towers (30-60%)
+    if (progress >= 0.3) {
+      const towerP = Math.min(1, (progress - 0.3) / 0.3);
+      // 8 outer crystalline towers
+      for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI * 2;
+        const x = Math.cos(angle) * outerRadius;
+        const z = Math.sin(angle) * outerRadius;
+        const tH = 10 * towerP;
+        if (tH > 0.5) {
+          const tower = this.createCylinder(1.5, 1.5, tH, 10, m.primary);
+          tower.position.set(x, tH / 2, z);
+          this.castleGroup.add(tower);
+
+          if (towerP >= 0.8) {
+            // Crystalline spire
+            const spire = this.createCone(2, 5, 10, m.roof);
+            spire.position.set(x, tH + 2.5, z);
+            this.castleGroup.add(spire);
+
+            // Glowing tip
+            const tip = this.createCone(0.4, 1.5, 8, m.glow);
+            tip.position.set(x, tH + 5.5, z);
+            this.castleGroup.add(tip);
+
+            this.addBloomHalo(x, tH + 6.5, z, 1.0);
+          }
+        }
+      }
+
+      // 6 inner towers
+      if (progress >= 0.4) {
+        const itP = Math.min(1, (progress - 0.4) / 0.25);
+        for (let i = 0; i < 6; i++) {
+          const angle = (i / 6) * Math.PI * 2 + Math.PI / 6;
+          const x = Math.cos(angle) * 7;
+          const z = Math.sin(angle) * 7;
+          const itH = 14 * itP;
+          if (itH > 1) {
+            const tower = this.createCylinder(1.3, 1.3, itH, 10, m.secondary);
+            tower.position.set(x, itH / 2, z);
+            this.castleGroup.add(tower);
+
+            if (itP >= 0.85) {
+              const spire = this.createCone(1.8, 4, 10, m.roof);
+              spire.position.set(x, itH + 2, z);
+              this.castleGroup.add(spire);
+
+              const glowTip = this.createCone(0.35, 1.2, 8, m.glow);
+              glowTip.position.set(x, itH + 4.5, z);
+              this.castleGroup.add(glowTip);
+            }
+          }
+        }
+      }
+    }
+
+    // Phase 4: Mythic central tower (45-80%)
+    if (progress >= 0.45) {
+      const centralP = Math.min(1, (progress - 0.45) / 0.35);
+      const centralH = 22 * centralP;
+
+      if (centralH > 1) {
+        const centralTower = this.createCylinder(4, 4, centralH, 16, m.primary);
+        centralTower.position.set(0, centralH / 2, 0);
+        this.castleGroup.add(centralTower);
+
+        // Glowing bands
+        if (centralP >= 0.4) {
+          const bandCount = Math.min(7, Math.floor(centralP * 8));
+          for (let i = 0; i < bandCount; i++) {
+            const band = this.createCylinder(4.3, 4.3, 0.5, 16, m.glow);
+            band.position.set(0, 2 + i * 3, 0);
+            this.castleGroup.add(band);
+          }
+        }
+
+        // Grand crystalline spire
+        if (centralP >= 0.85) {
+          const mainSpire = this.createCone(5.5, 6, 16, m.roof);
+          mainSpire.position.set(0, centralH + 3, 0);
+          this.castleGroup.add(mainSpire);
+
+          const glowSpire = this.createCone(1, 5, 10, m.glow);
+          glowSpire.position.set(0, centralH + 8, 0);
+          this.castleGroup.add(glowSpire);
+
+          this.addBloomHalo(0, centralH + 11, 0, 2.5);
+        }
+      }
+
+      // Sky bridges from inner towers to central
+      if (progress >= 0.7) {
+        const bridgeP = Math.min(1, (progress - 0.7) / 0.1);
+        if (bridgeP >= 0.8) {
+          for (let i = 0; i < 6; i++) {
+            const angle = (i / 6) * Math.PI * 2 + Math.PI / 6;
+            const x = Math.cos(angle) * 7;
+            const z = Math.sin(angle) * 7;
+            const bridgeLen = Math.sqrt(x * x + z * z);
+            const bridge = this.createBox(0.8, 0.3, bridgeLen * 0.9, m.secondary);
+            bridge.position.set(x / 2, 12, z / 2);
+            bridge.lookAt(new THREE.Vector3(x, 12, z));
+            this.castleGroup.add(bridge);
+          }
+        }
+      }
+    }
+
+    // Phase 5: Legendary details (75-100%)
+    if (progress >= 0.75) {
+      // Rune pillars around outer ring
+      this.addRunePillars(state, m.glow);
+
+      // Additional bloom halos at base of walls
+      for (let i = 0; i < 4; i++) {
+        const angle = (i / 4) * Math.PI * 2;
+        this.addBloomHalo(
+          Math.cos(angle) * outerRadius, 0.5,
+          Math.sin(angle) * outerRadius, 1.2
+        );
+      }
+    }
+
+    // Gate
+    if (progress >= 0.5) {
+      this.addGate(0, 0, outerRadius + 1, 2.5, m.glow);
+    }
+
+    // Torches
+    if (progress >= 0.7) {
+      for (let i = 0; i < 16; i++) {
+        const angle = (i / 16) * Math.PI * 2;
+        this.addTorch(Math.cos(angle) * 9, 4, Math.sin(angle) * 9);
+      }
+    }
+
+    // Flags at 100%
+    if (progress >= 1) {
+      this.addFlag(0, 33, 0, state.tier);
+      for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI * 2;
+        this.addFlag(
+          Math.cos(angle) * outerRadius, 16,
+          Math.sin(angle) * outerRadius, state.tier
+        );
+      }
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * Math.PI * 2 + Math.PI / 6;
+        this.addFlag(
+          Math.cos(angle) * 7, 19,
+          Math.sin(angle) * 7, state.tier
+        );
       }
     }
   }
@@ -1262,7 +2239,7 @@ export class CastleMeshBuilder {
   // ─── Flags ────────────────────────────────────────────────
 
   private updateFlags(state: RenderState): void {
-    const windStrength = state.isZombie ? 0.1 : 0.5 + state.smoothVolume * 0.5;
+    const windStrength = 0.5 + state.smoothVolume * 0.5;
 
     for (const flag of this.flagMeshes) {
       if (flag.geometry instanceof THREE.PlaneGeometry) {
@@ -1277,7 +2254,7 @@ export class CastleMeshBuilder {
       }
     }
 
-    this.flagsGroup.visible = !state.isZombie || state.smoothDecay < 0.8;
+    this.flagsGroup.visible = true;
   }
 
   // ─── Window glow lights (warm interior at night) ──────────
@@ -1463,15 +2440,19 @@ export class CastleMeshBuilder {
       ? 1 - state.smoothDecay * 0.25
       : 1 - state.smoothDecay * 0.6;
 
-    // Cursed/zombie: dim
-    const stateMult = state.isCursed ? 0.15 : state.isZombie ? 0.25 : 1;
+    const stateMult = 1;
     const legendaryBoost = state.isLegendary ? 1.8 : 1.0;
     const nightIntensityBoost = 1 + nightFactor * 0.6;
+
+    // Population density modulates light brightness —
+    // ghost town (density ~0) → 30% lights, bustling (density ~1) → full brightness
+    const pop = state.smoothPopulation ?? state.populationDensity ?? 0.5;
+    const populationMult = 0.3 + pop * 0.7;
 
     // ── Update zone lights (the 2–4 real PointLights) ──────────
     // LOD scale is applied to reduce GPU cost when camera is far
     const lodScale = this.lightLODScale;
-    const zoneIntensity = 0.8 * effectiveGlow * decayDim * stateMult * legendaryBoost * nightIntensityBoost * lodScale;
+    const zoneIntensity = 0.8 * effectiveGlow * decayDim * stateMult * populationMult * legendaryBoost * nightIntensityBoost * lodScale;
 
     if (this.zoneLights.length > 0) {
       // Zone 1: Interior warm glow
@@ -1485,13 +2466,15 @@ export class CastleMeshBuilder {
       }
     }
     if (this.zoneLights.length > 1) {
-      // Zone 2: Entrance/torch glow
+      // Zone 2: Entrance/torch glow — also scales with population
       const torch = this.zoneLights[1];
-      const torchFlicker = 0.90 + Math.random() * 0.15;
+      // Flicker amplitude increases with density (more fires burning = livelier flicker)
+      const flickerAmp = 0.08 + pop * 0.12;
+      const torchFlicker = (1 - flickerAmp) + Math.random() * flickerAmp * 2;
       // Torches are slightly brighter — entrance focal point
       const torchBoost = 1 + nightFactor * 1.2;
-      torch.intensity = (state.isCursed ? 0.2 : state.isZombie ? 0.3 : 0.6)
-        * torchBoost * torchFlicker * decayDim * lodScale;
+      torch.intensity = 0.6
+        * populationMult * torchBoost * torchFlicker * decayDim * lodScale;
       if (nightFactor > 0.2) {
         const warmShift = (nightFactor - 0.2) / 0.8;
         torch.color.setHex(0xff6600);
@@ -1500,7 +2483,7 @@ export class CastleMeshBuilder {
     }
 
     // ── Update emissive window glow meshes (zero GPU light cost) ──
-    const baseOpacity = 0.6 * effectiveGlow * decayDim * stateMult;
+    const baseOpacity = 0.6 * effectiveGlow * decayDim * stateMult * populationMult;
     const haloOpacity = baseOpacity * 0.35;
 
     if (effectiveGlow < 0.01) {
@@ -1543,8 +2526,7 @@ export class CastleMeshBuilder {
       : 1;
     const effectiveGlow = Math.max(glowFactor, eveningFactor * 0.2);
 
-    // State modifiers
-    const stateMult = state.isCursed ? 0.1 : state.isZombie ? 0.15 : 1;
+    const stateMult = 1;
     const decayDim = state.isLegendary
       ? 1 - state.smoothDecay * 0.2
       : 1 - state.smoothDecay * 0.5;
@@ -1704,7 +2686,10 @@ export class CastleMeshBuilder {
     const woodMat = this.mats.wood;
 
     const flagColors: Record<CastleTier, number> = {
-      keep: 0x8B0000, castle: 0x0000CD, fortress: 0x800080, citadel: 0xFFE082
+      hut: 0x6B4423, cottage: 0x8B5A2B, tower: 0x8B6914,
+      keep: 0x8B0000, manor: 0x556B2F, castle: 0x0000CD,
+      stronghold: 0x4A0000, fortress: 0x800080, palace: 0xDAA520,
+      citadel: 0xFFE082, empire: 0xFFD700, legend: 0xFFF8DC
     };
 
     const flagMat = new THREE.MeshStandardMaterial({

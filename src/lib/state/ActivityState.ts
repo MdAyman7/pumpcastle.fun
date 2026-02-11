@@ -18,6 +18,24 @@ export interface ActivityResult {
   volumeRatio: number;
   isZombie: boolean;
   hoursSinceLastTrade: number;
+  populationDensity: number;  // 0–1 normalized, drives castle life visuals
+}
+
+/**
+ * Compute population density from transaction counts.
+ * Returns a 0–1 score that drives castle life: villagers, guards, smoke, torch brightness.
+ *
+ * Unique wallets (60% weight) are the strongest signal of "real life" —
+ * many wallets = many distinct people visiting the castle.
+ * Transaction count (40% weight) adds bustle within the existing population.
+ *
+ * Log scale ensures both tiny and massive tokens produce useful values:
+ *   0 → 0, 10 → 0.25, 100 → 0.50, 1000 → 0.75, 10000+ → 1.0
+ */
+export function computePopulationDensity(tokenData: TokenData): number {
+  const walletScore = Math.min(1, Math.log10(Math.max(1, tokenData.uniqueTransactions24)) / 4);
+  const txnScore = Math.min(1, Math.log10(Math.max(1, tokenData.txnCount24)) / 4.7);
+  return walletScore * 0.6 + txnScore * 0.4;
 }
 
 /**
@@ -50,11 +68,14 @@ export function computeActivity(tokenData: TokenData): ActivityResult {
     level = 'slow';
   }
 
+  const populationDensity = computePopulationDensity(tokenData);
+
   return {
     level,
     volumeRatio,
     isZombie,
-    hoursSinceLastTrade
+    hoursSinceLastTrade,
+    populationDensity
   };
 }
 

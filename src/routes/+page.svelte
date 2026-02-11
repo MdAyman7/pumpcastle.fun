@@ -21,7 +21,6 @@
   } from '$lib/stores/mapStore';
   import WorldMap from '$lib/components/WorldMap.svelte';
   import type { WorldState } from '$lib/types';
-  import type { WeatherRenderState } from '$lib/state/WeatherState';
   import type { TimeInfo } from '$lib/state/TimeState';
   import { getAudioCueSystem } from '$lib/audio/AudioCueSystem';
   import { VisualCueFallback, VISUAL_CUE_STYLES } from '$lib/audio/VisualCueFallback';
@@ -32,10 +31,9 @@
   let inputAddress = '';
   let drawerOpen = false;
   let searchFocused = false;
-  let weatherInfo: WeatherRenderState | null = null;
   let timeInfo: TimeInfo | null = null;
   let showTimeIndicator = true;
-  let weatherInterval: ReturnType<typeof setInterval> | null = null;
+  let timeInterval: ReturnType<typeof setInterval> | null = null;
   let qualityLevel: string = 'medium';
 
   // View mode: 'map' shows the kingdom overview, 'castle' shows the 3D scene
@@ -70,11 +68,11 @@
 
   // Tier icons for map region display
   function getTierIcon(tier: string, phase: string): string {
-    if (phase === 'zombie') return '🧟';
-    if (phase === 'cursed') return '👻';
     if (phase === 'construction') return '🏗';
     const icons: Record<string, string> = {
-      citadel: '🏰', fortress: '🏰', castle: '🏯', keep: '⛫'
+      hut: '🛖', cottage: '🏠', tower: '🗼', keep: '⛫',
+      manor: '🏛', castle: '🏯', stronghold: '🏰', fortress: '🏰',
+      palace: '👑', citadel: '🏰', empire: '⚔', legend: '🐉'
     };
     return icons[tier] || '⛫';
   }
@@ -93,19 +91,32 @@
     return num.toFixed(2);
   }
 
-  function getTierName(state: WorldState): string {
-    const names: Record<string, string> = {
-      keep: 'Stone Keep', castle: 'Fortified Castle',
-      fortress: 'Grand Fortress', citadel: 'Legendary Citadel'
+  function getTierSuffix(tier: string): string {
+    const suffixes: Record<string, string> = {
+      hut: 'Hut', cottage: 'Cottage', tower: 'Tower', keep: 'Keep',
+      manor: 'Manor', castle: 'Castle', stronghold: 'Stronghold',
+      fortress: 'Fortress', palace: 'Palace', citadel: 'Citadel',
+      empire: 'Empire', legend: 'Legend'
     };
-    return names[state.tier] || state.tier;
+    return suffixes[tier] || 'Hut';
+  }
+
+  function getCastleName(state: WorldState, token: { name: string; symbol: string } | null): string {
+    const suffix = getTierSuffix(state.tier);
+    if (!token) return suffix;
+    const prefix = token.name.length <= 12 ? token.name : `$${token.symbol}`;
+    return `${prefix} ${suffix}`;
+  }
+
+  function handleImgError(e: Event): void {
+    const img = e.currentTarget;
+    if (img instanceof HTMLImageElement) img.style.display = 'none';
   }
 
   function getPhaseName(state: WorldState): string {
     const names: Record<string, string> = {
       construction: 'Building', graduated: 'Graduated',
-      thriving: 'Thriving', declining: 'Declining',
-      dormant: 'Dormant', zombie: 'Zombie', cursed: 'Cursed'
+      thriving: 'Thriving'
     };
     return names[state.phase] || state.phase;
   }
@@ -113,8 +124,7 @@
   function getPhaseColor(state: WorldState): string {
     const colors: Record<string, string> = {
       construction: '#f59e0b', graduated: '#eab308',
-      thriving: '#22c55e', declining: '#ef4444',
-      dormant: '#6b7280', zombie: '#4b5563', cursed: '#7c3aed'
+      thriving: '#22c55e'
     };
     return colors[state.phase] || '#6b7280';
   }
@@ -295,32 +305,6 @@
     return icons[period] || '🕐';
   }
 
-  function getWeatherIcon(condition: string): string {
-    const icons: Record<string, string> = {
-      clear: '☀️', cloudy: '☁️', rain: '🌧️',
-      snow: '❄️', storm: '⛈️', fog: '🌫️'
-    };
-    return icons[condition] || '🌤️';
-  }
-
-  function getWeatherLabel(w: WeatherRenderState): string {
-    const temp = Math.round(w.temperature);
-    const labels: Record<string, string> = {
-      clear: 'Clear', cloudy: 'Cloudy', rain: 'Rain',
-      snow: 'Snow', storm: 'Storm', fog: 'Fog'
-    };
-    return `${temp}° ${labels[w.condition] || 'Fair'}`;
-  }
-
-  /** Capitalized condition label for HUD */
-  function getConditionLabel(condition: string): string {
-    const labels: Record<string, string> = {
-      clear: 'Clear', cloudy: 'Cloudy', rain: 'Rain',
-      snow: 'Snow', storm: 'Storm', fog: 'Fog'
-    };
-    return labels[condition] || 'Fair';
-  }
-
   function toggleSound() {
     soundEnabled = !soundEnabled;
     audioCues.setEnabled(soundEnabled);
@@ -350,10 +334,9 @@
       renderer.pause();
     }
 
-    // Poll weather + time state from renderer every 2s for UI display
-    weatherInterval = setInterval(() => {
+    // Poll time state from renderer every 2s for UI display
+    timeInterval = setInterval(() => {
       if (renderer) {
-        weatherInfo = renderer.getWeatherState();
         timeInfo = renderer.getTimeInfo();
       }
     }, 2000);
@@ -390,7 +373,7 @@
       music.dispose();
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('keydown', handleKeydown);
-      if (weatherInterval) clearInterval(weatherInterval);
+      if (timeInterval) clearInterval(timeInterval);
     }
   });
 
@@ -518,29 +501,18 @@
     {/if}
   </div>
 
-  <!-- World HUD: unified time + weather (castle mode only) -->
-  {#if viewMode === 'castle' && (timeInfo || weatherInfo)}
+  <!-- World HUD: time display (castle mode only) -->
+  {#if viewMode === 'castle' && timeInfo}
     <div
       class="world-hud"
       class:legendary={$worldState?.isLegendary}
       class:night={timeInfo && (timeInfo.period === 'night' || timeInfo.period === 'dusk')}
       class:evening={timeInfo && (timeInfo.period === 'evening' || timeInfo.period === 'dawn')}
     >
-      {#if timeInfo}
-        <span class="hud-icon">{getTimeIcon(timeInfo.period)}</span>
-        <span class="hud-period">{timeInfo.periodLabel}</span>
-        <span class="hud-sep">·</span>
-        <span class="hud-time">{timeInfo.formattedTime}</span>
-      {/if}
-      {#if weatherInfo}
-        <span class="hud-sep">·</span>
-        <span class="hud-temp">{Math.round(weatherInfo.temperature)}°C</span>
-        <span class="hud-sep">·</span>
-        <span class="hud-condition">{getConditionLabel(weatherInfo.condition)}</span>
-      {:else}
-        <span class="hud-sep">·</span>
-        <span class="hud-condition">Clear</span>
-      {/if}
+      <span class="hud-icon">{getTimeIcon(timeInfo.period)}</span>
+      <span class="hud-period">{timeInfo.periodLabel}</span>
+      <span class="hud-sep">·</span>
+      <span class="hud-time">{timeInfo.formattedTime}</span>
     </div>
   {/if}
 </div>
@@ -562,6 +534,29 @@
 </div>
 {/if}
 
+<!-- Token identity badge (castle view only) -->
+{#if viewMode === 'castle' && $tokenData && $worldState}
+  <div class="token-identity">
+    {#if $tokenData.imageUrl}
+      <!-- svelte-ignore a11y-missing-attribute -->
+      <img
+        class="token-identity-img"
+        src={$tokenData.imageUrl}
+        alt={$tokenData.symbol}
+        on:error={handleImgError}
+      />
+    {:else}
+      <div class="token-identity-placeholder">
+        {$tokenData.symbol.charAt(0)}
+      </div>
+    {/if}
+    <div class="token-identity-text">
+      <span class="token-identity-name">{getCastleName($worldState, $tokenData)}</span>
+      <span class="token-identity-symbol">${$tokenData.symbol}</span>
+    </div>
+  </div>
+{/if}
+
 <!-- Bottom-left: state badges (castle view only) -->
 {#if viewMode === 'castle' && $worldState}
   <div class="status-strip">
@@ -569,7 +564,7 @@
       {getPhaseName($worldState)}
     </div>
     <div class="tier-pill">
-      {getTierName($worldState)}
+      {getCastleName($worldState, $tokenData)}
     </div>
     {#if $worldState.isLegendary}
       <div class="legendary-pill">🐉 Legendary</div>
@@ -585,7 +580,11 @@
       <span class="stat-lbl">MCap</span>
     </div>
     <div class="stat-divider"></div>
-    <div class="stat">
+    <div class="stat price-change-stat"
+      class:big-swing={Math.abs($tokenData.priceChange24h) > 10}
+      class:bullish={$tokenData.priceChange24h > 0}
+      class:bearish={$tokenData.priceChange24h < 0}
+    >
       <span class="stat-val" class:positive={$tokenData.priceChange24h > 0} class:negative={$tokenData.priceChange24h < 0}>
         {$tokenData.priceChange24h > 0 ? '+' : ''}{$tokenData.priceChange24h.toFixed(1)}%
       </span>
@@ -670,7 +669,7 @@
         <h4>Castle</h4>
         <div class="detail-row">
           <span>Tier</span>
-          <span class="detail-val accent">{getTierName($worldState)}</span>
+          <span class="detail-val accent">{getCastleName($worldState, $tokenData)}</span>
         </div>
         <div class="detail-row">
           <span>Phase</span>
@@ -684,56 +683,9 @@
             {$tokenData.isGraduated ? 'Yes' : 'No'}
           </span>
         </div>
-        <div class="detail-row">
-          <span>Decay</span>
-          <div class="detail-bar-wrap">
-            <div class="detail-bar">
-              <div class="detail-bar-fill" style="width: {$worldState.decay * 100}%"></div>
-            </div>
-            <span class="detail-val">{($worldState.decay * 100).toFixed(1)}%</span>
-          </div>
-        </div>
-        <div class="detail-row">
-          <span>Activity</span>
-          <span class="detail-val">{$worldState.activityLevel}</span>
-        </div>
       </div>
 
-      {#if weatherInfo}
-        <div class="detail-section">
-          <h4>Weather</h4>
-          <div class="detail-row">
-            <span>Condition</span>
-            <span class="detail-val">{getWeatherIcon(weatherInfo.condition)} {weatherInfo.condition}</span>
-          </div>
-          <div class="detail-row">
-            <span>Temperature</span>
-            <span class="detail-val">{Math.round(weatherInfo.temperature)}°C</span>
-          </div>
-          <div class="detail-row">
-            <span>Wind</span>
-            <span class="detail-val">{(weatherInfo.windFactor * 100).toFixed(0)}%</span>
-          </div>
-          <div class="detail-row">
-            <span>Cloud Cover</span>
-            <span class="detail-val">{(weatherInfo.cloudiness * 100).toFixed(0)}%</span>
-          </div>
-        </div>
-      {/if}
 
-      {#if timeInfo}
-        <div class="detail-section">
-          <h4>Time of Day</h4>
-          <div class="detail-row">
-            <span>Period</span>
-            <span class="detail-val">{getTimeIcon(timeInfo.period)} {timeInfo.periodLabel}</span>
-          </div>
-          <div class="detail-row">
-            <span>Local Time</span>
-            <span class="detail-val">{timeInfo.formattedTime}</span>
-          </div>
-        </div>
-      {/if}
 
       <div class="detail-section">
         <h4>Graphics Quality</h4>
@@ -797,12 +749,6 @@
         <p class="quality-hint">Ambient music that adapts to the castle state. Default: off.</p>
       </div>
 
-      <div class="detail-section hint-section">
-        <p>Hold and drag on the scene to orbit the camera</p>
-        <p>Weather is based on your location</p>
-        <p>Lighting changes with your local time</p>
-        <p>Data refreshes every 15s</p>
-      </div>
     </div>
   {:else}
     <div class="drawer-empty">
@@ -1098,7 +1044,62 @@
     color: #fbbf24;
     border: 1px solid rgba(234, 179, 8, 0.25);
   }
-  /* ---- World HUD (unified time + weather, inline in top-bar) ---- */
+
+  /* ---- Token identity badge ---- */
+  .token-identity {
+    position: fixed;
+    top: 68px;
+    left: 16px;
+    z-index: 15;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    border-radius: 12px;
+    backdrop-filter: blur(16px) saturate(1.4);
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    background: rgba(15, 15, 20, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .token-identity-img {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .token-identity-placeholder {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Cinzel', serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #a1a1aa;
+  }
+  .token-identity-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .token-identity-name {
+    font-family: 'Cinzel', serif;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #fafafa;
+    letter-spacing: 0.02em;
+  }
+  .token-identity-symbol {
+    font-size: 0.68rem;
+    color: #71717a;
+    letter-spacing: 0.03em;
+  }
+
+  /* ---- World HUD (time display, inline in top-bar) ---- */
   .world-hud {
     display: flex;
     align-items: center;
@@ -1128,13 +1129,6 @@
   .hud-time {
     font-variant-numeric: tabular-nums;
     color: rgba(190, 190, 200, 0.8);
-  }
-  .hud-temp {
-    font-variant-numeric: tabular-nums;
-    color: rgba(190, 190, 200, 0.8);
-  }
-  .hud-condition {
-    color: rgba(170, 170, 180, 0.75);
   }
   .hud-sep {
     color: rgba(100, 100, 110, 0.5);
@@ -1222,6 +1216,36 @@
   }
   .positive { color: #22c55e !important; }
   .negative { color: #ef4444 !important; }
+
+  /* Price change mood glow */
+  .price-change-stat.bullish {
+    background: rgba(34, 197, 94, 0.06);
+    border-radius: 8px;
+    padding: 4px 8px;
+  }
+  .price-change-stat.bearish {
+    background: rgba(239, 68, 68, 0.06);
+    border-radius: 8px;
+    padding: 4px 8px;
+  }
+  .price-change-stat.big-swing.bullish {
+    background: rgba(34, 197, 94, 0.10);
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.08);
+    animation: priceGlowGreen 3s ease-in-out infinite;
+  }
+  .price-change-stat.big-swing.bearish {
+    background: rgba(239, 68, 68, 0.10);
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.08);
+    animation: priceGlowRed 3s ease-in-out infinite;
+  }
+  @keyframes priceGlowGreen {
+    0%, 100% { box-shadow: 0 0 8px rgba(34, 197, 94, 0.06); }
+    50% { box-shadow: 0 0 16px rgba(34, 197, 94, 0.14); }
+  }
+  @keyframes priceGlowRed {
+    0%, 100% { box-shadow: 0 0 8px rgba(239, 68, 68, 0.06); }
+    50% { box-shadow: 0 0 16px rgba(239, 68, 68, 0.14); }
+  }
 
   .drawer-toggle {
     background: rgba(255, 255, 255, 0.06);
@@ -1363,24 +1387,6 @@
   }
   .detail-val.accent { color: #fbbf24; }
 
-  .detail-bar-wrap {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .detail-bar {
-    width: 60px;
-    height: 4px;
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-  .detail-bar-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #22c55e, #f59e0b, #ef4444);
-    border-radius: 2px;
-    transition: width 0.4s ease;
-  }
 
   .quality-buttons {
     display: flex;
@@ -1414,16 +1420,6 @@
     color: #52525b;
   }
 
-  .hint-section {
-    margin-top: auto;
-    padding-top: 12px;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-  }
-  .hint-section p {
-    margin: 0 0 4px;
-    font-size: 0.72rem;
-    color: #52525b;
-  }
 
   .drawer-empty {
     padding: 40px 20px;
@@ -1675,6 +1671,21 @@
     .chip-label { display: none; }
     .preset-chip { padding: 5px 8px; }
 
+    /* Token identity: compact on mobile */
+    .token-identity {
+      top: 56px;
+      left: 8px;
+      padding: 6px 10px;
+      gap: 8px;
+    }
+    .token-identity-img,
+    .token-identity-placeholder {
+      width: 24px;
+      height: 24px;
+    }
+    .token-identity-name { font-size: 0.75rem; }
+    .token-identity-symbol { display: none; }
+
     /* HUD: compact on mobile */
     .world-hud {
       font-size: 0.65rem;
@@ -1682,8 +1693,7 @@
       gap: 4px;
     }
     .hud-icon { font-size: 0.72rem; }
-    /* Hide condition & period on small screens, keep icon + time + temp */
-    .hud-condition { display: none; }
+    /* Hide period on small screens, keep icon + time */
     .hud-period { display: none; }
     /* Hide the separator after hidden period */
     .hud-period + .hud-sep { display: none; }

@@ -50,69 +50,33 @@ const PHASE_STYLES: Record<LifePhase, Omit<RegionStyle, 'filter'>> = {
     iconStroke: '#488838',
     overlay: 'none',
   },
-  declining: {
-    fill: '#8a7060',
-    stroke: '#6a5040',
-    strokeWidth: 1.5,
-    strokeDasharray: '',
-    labelColor: '#dcc0b0',
-    iconFill: '#9a8070',
-    iconStroke: '#6a5040',
-    overlay: 'none',
-  },
-  dormant: {
-    fill: '#686868',
-    stroke: '#484848',
-    strokeWidth: 1.5,
-    strokeDasharray: '',
-    labelColor: '#c0c0c0',
-    iconFill: '#787878',
-    iconStroke: '#484848',
-    overlay: 'none',
-  },
-  zombie: {
-    fill: '#3a4a3a',
-    stroke: '#2a3a2a',
-    strokeWidth: 1.5,
-    strokeDasharray: '',
-    labelColor: '#98b898',
-    iconFill: '#4a5a4a',
-    iconStroke: '#2a3a2a',
-    overlay: 'fog',
-  },
-  cursed: {
-    fill: '#4a2a4a',
-    stroke: '#3a1a3a',
-    strokeWidth: 2,
-    strokeDasharray: '',
-    labelColor: '#d098d0',
-    iconFill: '#5a3a5a',
-    iconStroke: '#3a1a3a',
-    overlay: 'cracks',
-  },
 };
 
 /** Tier affects region icon scale */
 export function tierScale(tier: CastleTier): number {
   switch (tier) {
-    case 'keep':     return 0.85;
-    case 'castle':   return 1.0;
-    case 'fortress': return 1.15;
-    case 'citadel':  return 1.3;
+    case 'hut':        return 0.7;
+    case 'cottage':    return 0.75;
+    case 'tower':      return 0.8;
+    case 'keep':       return 0.85;
+    case 'manor':      return 0.9;
+    case 'castle':     return 1.0;
+    case 'stronghold': return 1.05;
+    case 'fortress':   return 1.15;
+    case 'palace':     return 1.2;
+    case 'citadel':    return 1.3;
+    case 'empire':     return 1.4;
+    case 'legend':     return 1.5;
   }
 }
 
 /** Get full region style from a MapRegion */
 export function getRegionStyle(region: MapRegion): RegionStyle {
-  const base = PHASE_STYLES[region.phase] ?? PHASE_STYLES.dormant;
+  const base = PHASE_STYLES[region.phase] ?? PHASE_STYLES.construction;
 
   let filter = '';
   if (region.isLegendary) {
     filter = 'url(#legendaryGlow)';
-  } else if (region.phase === 'zombie') {
-    filter = 'url(#fogFilter)';
-  } else if (region.phase === 'cursed') {
-    filter = 'url(#cursedFilter)';
   }
 
   // Legendary overrides: gold stroke
@@ -144,10 +108,6 @@ export function phaseLabel(phase: LifePhase): string {
     construction: 'Under Construction',
     graduated: 'Graduated',
     thriving: 'Thriving',
-    declining: 'Declining',
-    dormant: 'Dormant',
-    zombie: 'Abandoned',
-    cursed: 'Cursed',
   };
   return labels[phase] ?? phase;
 }

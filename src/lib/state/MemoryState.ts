@@ -7,7 +7,7 @@
 
 export interface WorldMemory {
   // Highest tier ever reached
-  highestTier: 'keep' | 'castle' | 'fortress' | 'citadel';
+  highestTier: string;
 
   // Whether this token ever achieved legendary status
   wasLegendary: boolean;
@@ -27,8 +27,6 @@ export interface WorldMemory {
 
   // Scar tracking
   highestDecayReached: number;   // 0-1, max decay ever seen
-  wasCursed: boolean;
-  wasZombie: boolean;
 
   // Persistent visual marks (never removed)
   cracks: CrackMark[];
@@ -88,8 +86,6 @@ export class MemoryState {
       peakMarketCap: 0,
       peakVolume: 0,
       highestDecayReached: 0,
-      wasCursed: false,
-      wasZombie: false,
       cracks: [],
       rustPatches: [],
       brokenScaffolding: [],
@@ -107,23 +103,20 @@ export class MemoryState {
     isLegendary: boolean;
     hasGraduated: boolean;
     showGraduationCelebration: boolean;
-    isCursed: boolean;
-    isZombie: boolean;
     priceChange24h: number;
     marketCap: number;
     athMarketCap: number;
     volumeRatio: number;
   }): void {
-    const tierOrder = ['keep', 'castle', 'fortress', 'citadel'] as const;
+    const tierOrder = ['hut', 'cottage', 'tower', 'keep', 'manor', 'castle',
+      'stronghold', 'fortress', 'palace', 'citadel', 'empire', 'legend'] as const;
     const currentIdx = tierOrder.indexOf(state.tier as any);
-    const highestIdx = tierOrder.indexOf(this.memory.highestTier);
+    const highestIdx = tierOrder.indexOf(this.memory.highestTier as any);
     if (currentIdx > highestIdx) {
       this.memory.highestTier = tierOrder[currentIdx];
     }
 
     if (state.isLegendary) this.memory.wasLegendary = true;
-    if (state.isCursed) this.memory.wasCursed = true;
-    if (state.isZombie) this.memory.wasZombie = true;
 
     if (state.showGraduationCelebration && !this.memory.graduationWitnessed) {
       this.memory.graduationWitnessed = true;

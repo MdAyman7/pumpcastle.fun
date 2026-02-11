@@ -86,10 +86,11 @@ export class ParticleSystem {
       }
     }
 
-    // Fog particles for zombie/cursed states
-    if ((state.isZombie || state.isCursed) && this.particles.filter(p => p.type === 'fog').length < 30) {
-      if (this.random() < 0.1) {
-        this.spawnFog(state.isCursed);
+    // Light fog for very low population (activity-driven, not label-driven)
+    const pop = (state as any).populationDensity ?? (state as any).smoothPopulation ?? 0.5;
+    if (pop < 0.1 && this.particles.filter(p => p.type === 'fog').length < 15) {
+      if (this.random() < 0.05) {
+        this.spawnFog(false);
       }
     }
   }

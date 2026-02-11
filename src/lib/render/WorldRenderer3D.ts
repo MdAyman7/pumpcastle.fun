@@ -12,7 +12,7 @@
 
 import * as THREE from 'three';
 import type { TokenData, WorldState, RenderState } from '$lib/types';
-import { computeWorldState, hashString, seededRandom } from '$lib/state/CastleState';
+import { computeWorldState, computePriceWeather, hashString, seededRandom } from '$lib/state/CastleState';
 import { getPriceMoodColor } from '$lib/render/TokenIdentity';
 import { computeTimeInfo } from '$lib/state/TimeState';
 import type { TimeInfo } from '$lib/state/TimeState';
@@ -21,7 +21,6 @@ import { MemoryState } from '$lib/state/MemoryState';
 import { WeatherState } from '$lib/state/WeatherState';
 import type { WeatherRenderState } from '$lib/state/WeatherState';
 import { CastleMeshBuilder } from './CastleMeshBuilder';
-import { CreatureMeshBuilder } from './CreatureMeshBuilder';
 import { EnvironmentBuilder } from './EnvironmentBuilder';
 import { EffectsManager } from './EffectsManager';
 import { ActorManager } from './ActorManager';
@@ -48,7 +47,6 @@ export class WorldRenderer3D {
 
   // Sub-builders
   private castleBuilder: CastleMeshBuilder;
-  private creatureBuilder: CreatureMeshBuilder;
   private environmentBuilder: EnvironmentBuilder;
   private effectsManager: EffectsManager;
 
@@ -96,9 +94,11 @@ export class WorldRenderer3D {
   private targetDecay: number = 0;
   private targetVolume: number = 0;
   private targetConstruction: number = 0;
+  private targetPopulation: number = 0;
   private smoothDecay: number = 0;
   private smoothVolume: number = 0;
   private smoothConstruction: number = 0;
+  private smoothPopulation: number = 0;
 
   // Camera – base target (state-driven)
   private baseCameraPosition: THREE.Vector3;
@@ -216,7 +216,6 @@ export class WorldRenderer3D {
 
     // Builders
     this.castleBuilder = new CastleMeshBuilder(this.scene, this.seed);
-    this.creatureBuilder = new CreatureMeshBuilder(this.scene, this.seed);
     this.environmentBuilder = new EnvironmentBuilder(this.scene);
     this.effectsManager = new EffectsManager(this.scene, this.seed);
 
@@ -318,8 +317,8 @@ export class WorldRenderer3D {
 
     // Sun intensity — bright and dominant at noon, warm glow during evening, soft fill at night
     // Night: 0.65 (cinematic — clearly readable terrain, not pitch black)
-    // Noon: 2.0 (bright, lively — ACES tonemapping compresses this naturally)
-    const baseSunIntensity = 0.65 + daylight * 1.35;
+    // Noon: 2.5 (vibrant — ACES tonemapping compresses gracefully)
+    const baseSunIntensity = 0.65 + daylight * 1.85;
     this.sunLight.intensity = baseSunIntensity;
 
     // Sun color shifts: warm golden during evening, cool-warm at night, white midday
@@ -371,7 +370,7 @@ export class WorldRenderer3D {
     } else if (daylight > 0.5) {
       // Clear daytime: warm sky-bounce ambient (not cold blue-grey)
       this.ambientLight.color.setHex(0x708090).lerp(
-        new THREE.Color(0x90887a), (daylight - 0.5) / 0.5 * 0.3
+        new THREE.Color(0x95907a), (daylight - 0.5) / 0.5 * 0.4
       );
     } else {
       this.ambientLight.color.setHex(0x708090);
@@ -404,8 +403,8 @@ export class WorldRenderer3D {
     // The hemisphere light IS the sky illumination on terrain — at night, the
     // sky color (blue) paints everything with cool ambient light. This is the
     // single most important light for preventing black terrain at night.
-    // 0.50 at night → 0.80 at noon
-    this.hemiLight.intensity = 0.50 + daylight * 0.30;
+    // 0.50 at night → 0.90 at noon
+    this.hemiLight.intensity = 0.50 + daylight * 0.40;
 
     // Hemi ground color — at night, ground bounce is cool blue-grey (moonlit earth).
     // Brighter ground color = upward fill that lifts undersides of hills/trees.
@@ -414,9 +413,9 @@ export class WorldRenderer3D {
     this.hemiLight.groundColor.copy(dayGround).lerp(nightGround, nightFactor);
 
     // Target exposure — bright and clear during day, readable at night
-    // Day peak: 1.55 (ACES tonemapping compresses — needs higher input)
-    // Night floor: 0.90 (cinematic — ACES needs high input to stay readable)
-    this.targetExposure = 0.90 + daylight * 0.65 + eveningFactor * 0.08;
+    // Day peak: 1.75 (vibrant — ACES tonemapping compresses highlights gracefully)
+    // Night floor: 0.95 (cinematic — ACES needs high input to stay readable)
+    this.targetExposure = 0.95 + daylight * 0.80 + eveningFactor * 0.08;
 
     // ── Castle-focused lights ──────────────────────────────────
     // The castle is the visual anchor. At night it should GLOW like
@@ -424,10 +423,10 @@ export class WorldRenderer3D {
     // strong rim light ensures the silhouette pops against the sky.
     //
     // Key light: warm spotlight aimed at castle center.
-    // Day: 0.80 warm-white (castle pops against grass)
-    // Night: 0.55 warm amber (castle is brightest thing in scene)
+    // Day: 0.95 warm-white (castle pops against grass)
+    // Night: 0.60 warm amber (castle is brightest thing in scene)
     // Evening: warm golden boost
-    const castleKeyBase = 0.55 + daylight * 0.25;
+    const castleKeyBase = 0.60 + daylight * 0.35;
     this.castleKeyLight.intensity = castleKeyBase + eveningFactor * 0.15;
 
     // Key light color: warm white during day, rich warm amber at night.
@@ -595,7 +594,7 @@ export class WorldRenderer3D {
     this.skyDomeColors = new Float32Array(vertexCount * 3);
 
     // Default: daytime palette (will be updated per frame)
-    const zenithColor = new THREE.Color(0x4a8ac7);   // deeper blue overhead
+    const zenithColor = new THREE.Color(0x5a9ad7);   // vibrant blue overhead
     const midColor = new THREE.Color(0x87ceeb);       // standard sky blue
     const horizonColor = new THREE.Color(0xc8dce8);   // warm, pale (atmospheric)
     const belowColor = new THREE.Color(0x90a8b8);     // muted below-horizon
@@ -760,13 +759,13 @@ export class WorldRenderer3D {
     } else if (daylight < 0.45) {
       // Sunrise/sunset → day transition
       const t = (daylight - 0.25) / 0.20;
-      zenith = new THREE.Color(0x2a4a7a).lerp(new THREE.Color(0x4a8ac7), t);
+      zenith = new THREE.Color(0x2a4a7a).lerp(new THREE.Color(0x5a9ad7), t);
       mid = new THREE.Color(0xd08858).lerp(new THREE.Color(0x87ceeb), t);
       horizon = new THREE.Color(0xf0a868).lerp(new THREE.Color(0xc8dce8), t);
       below = new THREE.Color(0xc89060).lerp(new THREE.Color(0x90a8b8), t);
     } else {
       // Full day
-      zenith = new THREE.Color(0x4a8ac7);
+      zenith = new THREE.Color(0x5a9ad7);
       mid = new THREE.Color(0x87ceeb);
       horizon = new THREE.Color(0xc8dce8);
       below = new THREE.Color(0x90a8b8);
@@ -920,7 +919,6 @@ export class WorldRenderer3D {
     if (isNewToken) {
       this.seed = hashString(tokenData.address);
       this.castleBuilder.reset(this.seed);
-      this.creatureBuilder.reset(this.seed);
       this.effectsManager.reset(this.seed);
       this.actorManager.reset(this.seed);
       this.eventSystem.reset();
@@ -933,6 +931,7 @@ export class WorldRenderer3D {
       this.smoothDecay = 0;
       this.smoothVolume = 1;
       this.smoothConstruction = tokenData.isGraduated ? 1 : 0;
+      this.smoothPopulation = 0;
 
       // Reset orbit offset on new token
       this.dragOrbitYaw = 0;
@@ -949,6 +948,7 @@ export class WorldRenderer3D {
     this.targetDecay = this.worldState.decay;
     this.targetVolume = this.worldState.volumeRatio;
     this.targetConstruction = this.worldState.constructionProgress;
+    this.targetPopulation = this.worldState.populationDensity;
 
     // Rebuild trees with road exclusion zones based on current state
     if (isNewToken) {
@@ -956,6 +956,16 @@ export class WorldRenderer3D {
     }
 
     this.memoryState.update(this.worldState);
+
+    // Feed price-driven weather into the weather system
+    const priceWeather = computePriceWeather(
+      tokenData.priceChange1h ?? tokenData.priceChange24h * 0.3, // fallback: 30% of 24h as 1h estimate
+      tokenData.priceChange24h,
+      tokenData.high24 ?? tokenData.marketCap * (1 + Math.abs(tokenData.priceChange24h) / 100), // estimate from change
+      tokenData.low24  ?? tokenData.marketCap * (1 - Math.abs(tokenData.priceChange24h) / 100), // estimate from change
+    );
+    this.weatherState.setPriceWeather(priceWeather);
+
     this.updateCameraTarget();
   }
 
@@ -975,7 +985,9 @@ export class WorldRenderer3D {
       this.baseLookAt.set(0, 3, 0);
     } else {
       const tierDistance: Record<string, number> = {
-        'keep': 28, 'castle': 32, 'fortress': 38, 'citadel': 44
+        'hut': 22, 'cottage': 24, 'tower': 26, 'keep': 28,
+        'manor': 30, 'castle': 32, 'stronghold': 35, 'fortress': 38,
+        'palace': 40, 'citadel': 44, 'empire': 48, 'legend': 52
       };
       const dist = tierDistance[this.worldState.tier] || 32;
       this.baseCameraPosition.set(dist * 0.35, 12, dist);
@@ -1089,6 +1101,7 @@ export class WorldRenderer3D {
     const lerpFactor = 1 - Math.pow(0.05, deltaTime / 1000);
     this.smoothDecay += (this.targetDecay - this.smoothDecay) * lerpFactor;
     this.smoothVolume += (this.targetVolume - this.smoothVolume) * lerpFactor;
+    this.smoothPopulation += (this.targetPopulation - this.smoothPopulation) * lerpFactor;
 
     // Post-graduation: construction is permanently locked at 100%.
     // Higher tiers always appear fully built — only decay affects them.
@@ -1103,6 +1116,7 @@ export class WorldRenderer3D {
       smoothDecay: this.smoothDecay,
       smoothVolume: this.smoothVolume,
       smoothConstruction: this.smoothConstruction,
+      smoothPopulation: this.smoothPopulation,
       time: this.time,
       deltaTime,
       celebrationProgress: getCelebrationProgress(),
@@ -1111,7 +1125,7 @@ export class WorldRenderer3D {
       eveningFactor: this.getEveningFactor(),
     };
 
-    // Weather (independent from token state)
+    // Weather (driven by token price data, smoothly interpolated each frame)
     this.weatherState.update(deltaTime);
     const weather = this.weatherState.getRenderState();
 
@@ -1123,7 +1137,6 @@ export class WorldRenderer3D {
 
     // Scene elements — always update (castle is focal point)
     this.castleBuilder.update(this.renderState);
-    this.creatureBuilder.update(this.renderState);
     this.effectsManager.update(this.renderState, deltaTime);
 
     // Environment — trees/hills throttled by quality level
@@ -1244,25 +1257,7 @@ export class WorldRenderer3D {
     }
 
     // State-driven overrides (blend on top of day/night)
-    if (this.renderState.isCursed) {
-      this.targetFogColor.set(baseSky).lerp(new THREE.Color(0x2a1a3a), 0.7);
-      this.targetFogNear = 10;
-      this.targetFogFar = 40;
-      this.targetSunIntensity = 0.3;
-      this.targetAmbientIntensity = 0.2;
-    } else if (this.renderState.isZombie) {
-      this.targetFogColor.set(baseSky).lerp(new THREE.Color(0x3a4a3a), 0.6);
-      this.targetFogNear = 15;
-      this.targetFogFar = 50;
-      this.targetSunIntensity = 0.5;
-      this.targetAmbientIntensity = 0.3;
-    } else if (this.renderState.phase === 'declining') {
-      this.targetFogColor.set(baseSky).lerp(new THREE.Color(0x8090a0), 0.4);
-      this.targetFogNear = 25;
-      this.targetFogFar = 80;
-      this.targetSunIntensity = 0.8;
-      this.targetAmbientIntensity = 0.35;
-    } else if (this.renderState.priceChange24h < -20) {
+    if (this.renderState.priceChange24h < -20) {
       this.targetFogColor.set(baseSky).lerp(new THREE.Color(0x5a5a6a), 0.4);
       this.targetFogNear = 20;
       this.targetFogFar = 70;
@@ -1278,10 +1273,10 @@ export class WorldRenderer3D {
       this.targetFogColor.copy(baseSky);
       // Clear day: fog pushed well back for open, airy feel
       // Night: fog still pushed back enough to see terrain and hills clearly.
-      // Night floor: near=50, far=100 (not too close — hills should be visible)
-      // Day peak: near=80, far=190 (open, airy)
-      this.targetFogNear = 50 + daylight * 30;
-      this.targetFogFar = 100 + daylight * 90;
+      // Night floor: near=55, far=110 (not too close — hills should be visible)
+      // Day peak: near=90, far=210 (open, airy, vibrant)
+      this.targetFogNear = 55 + daylight * 35;
+      this.targetFogFar = 110 + daylight * 100;
       // Match updateDayNightCycle values
       this.targetSunIntensity = 0.45 + daylight * 1.55;
       this.targetAmbientIntensity = 0.40 + daylight * 0.50;
@@ -1352,8 +1347,8 @@ export class WorldRenderer3D {
     const fogDecayMult = this.renderState.isLegendary ? 0.5 : 1.0;
     this.targetFogNear -= decayFog * 10 * fogDecayMult;
     this.targetFogFar -= decayFog * 30 * fogDecayMult;
-    this.targetSunIntensity *= (1 - this.renderState.smoothDecay * (this.renderState.isLegendary ? 0.20 : 0.4));
-    this.targetAmbientIntensity *= (1 - this.renderState.smoothDecay * (this.renderState.isLegendary ? 0.15 : 0.3));
+    this.targetSunIntensity *= (1 - this.renderState.smoothDecay * (this.renderState.isLegendary ? 0.20 : 0.30));
+    this.targetAmbientIntensity *= (1 - this.renderState.smoothDecay * (this.renderState.isLegendary ? 0.15 : 0.22));
 
     // ─── Weather layer (additive modifier, never overpowers token state) ───
     if (weather) {
@@ -1393,17 +1388,14 @@ export class WorldRenderer3D {
     // ── Castle-focused light modifiers (state + weather) ─────────
     // The castle key light and rim light are set in updateDayNightCycle()
     // based on time-of-day. Here we apply additional modifiers for
-    // token state (cursed, zombie, legendary, decay) and weather.
+    // token state (population, legendary, decay) and weather.
     if (this.renderState) {
-      // State modifiers: cursed/zombie dims castle lights
-      if (this.renderState.isCursed) {
-        this.castleKeyLight.intensity *= 0.3;
-        this.castleRimLight.intensity *= 0.4;
-        this.castleRimLight.color.setHex(0x6a3a6a); // sickly purple rim
-      } else if (this.renderState.isZombie) {
-        this.castleKeyLight.intensity *= 0.4;
-        this.castleRimLight.intensity *= 0.5;
-        this.castleRimLight.color.lerp(new THREE.Color(0x4a6a4a), 0.5);
+      // Low population dims castle lights (activity-driven, not label-driven)
+      const pop = this.renderState.populationDensity ?? this.renderState.smoothPopulation ?? 0.5;
+      if (pop < 0.2) {
+        const dimFactor = 0.4 + pop * 3; // 0.4 at ghost town, 1.0 at pop=0.2
+        this.castleKeyLight.intensity *= dimFactor;
+        this.castleRimLight.intensity *= dimFactor;
       }
 
       // Legendary: castle gets stronger key and rim — the hero glow.
@@ -1436,8 +1428,8 @@ export class WorldRenderer3D {
       if (this.renderState.priceMood !== undefined) {
         const moodColor = getPriceMoodColor(this.renderState.priceMood);
         if (moodColor) {
-          // Blend at most 15% toward mood color — subtlety is mandatory
-          const blendStrength = Math.min(0.15, Math.abs(this.renderState.priceMood) * 0.18);
+          // Blend at most 22% toward mood color — noticeable but not overwhelming
+          const blendStrength = Math.min(0.22, Math.abs(this.renderState.priceMood) * 0.25);
           this.castleKeyLight.color.lerp(moodColor, blendStrength);
         }
       }
@@ -1504,10 +1496,6 @@ export class WorldRenderer3D {
 
   getWorldState(): WorldState | null {
     return this.worldState;
-  }
-
-  getWeatherState(): WeatherRenderState {
-    return this.weatherState.getRenderState();
   }
 
   getTimeInfo(): TimeInfo {
@@ -1592,7 +1580,6 @@ export class WorldRenderer3D {
 
     // Dispose builders
     this.castleBuilder.dispose();
-    this.creatureBuilder.dispose();
     this.environmentBuilder.dispose();
     this.effectsManager.dispose();
 

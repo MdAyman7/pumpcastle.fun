@@ -75,16 +75,33 @@ export class ActorManager {
   private chimneyPositions: THREE.Vector3[] = [];
 
   // Guard patrol paths per tier
+  private readonly HUT_PATROL: PatrolPoint[][] = [
+    [{ x: -1, y: 0.1, z: 2 }, { x: 1, y: 0.1, z: 2 }]
+  ];
+  private readonly COTTAGE_PATROL: PatrolPoint[][] = [
+    [{ x: -1.5, y: 0.1, z: 2.5 }, { x: 1.5, y: 0.1, z: 2.5 }]
+  ];
+  private readonly TOWER_PATROL: PatrolPoint[][] = [
+    [{ x: -1, y: 0.1, z: 2 }, { x: 1, y: 0.1, z: 2 }]
+  ];
   private readonly KEEP_PATROL: PatrolPoint[][] = [
     [{ x: -2, y: 0.1, z: 3 }, { x: 2, y: 0.1, z: 3 }, { x: 2, y: 0.1, z: -2 }, { x: -2, y: 0.1, z: -2 }]
+  ];
+  private readonly MANOR_PATROL: PatrolPoint[][] = [
+    [{ x: -3, y: 0.1, z: 4 }, { x: 3, y: 0.1, z: 4 }, { x: 3, y: 0.1, z: -3 }, { x: -3, y: 0.1, z: -3 }],
+    [{ x: -4, y: 1, z: 3 }, { x: 4, y: 1, z: 3 }]
   ];
   private readonly CASTLE_PATROL: PatrolPoint[][] = [
     [{ x: -5, y: 3, z: 5 }, { x: 5, y: 3, z: 5 }],
     [{ x: 5, y: 3, z: 5 }, { x: 5, y: 3, z: -5 }],
     [{ x: -5, y: 3, z: -5 }, { x: -5, y: 3, z: 5 }]
   ];
+  private readonly STRONGHOLD_PATROL: PatrolPoint[][] = [];
   private readonly FORTRESS_PATROL: PatrolPoint[][] = [];
+  private readonly PALACE_PATROL: PatrolPoint[][] = [];
   private readonly CITADEL_PATROL: PatrolPoint[][] = [];
+  private readonly EMPIRE_PATROL: PatrolPoint[][] = [];
+  private readonly LEGEND_PATROL: PatrolPoint[][] = [];
 
   constructor(scene: THREE.Scene, seed: number = 12345) {
     this.scene = scene;
@@ -124,8 +141,25 @@ export class ActorManager {
 
     this.createGuardTemplate();
     this.createBirdTemplate();
+    this.buildStrongholdPatrol();
     this.buildFortressPatrol();
+    this.buildPalacePatrol();
     this.buildCitadelPatrol();
+    this.buildEmpirePatrol();
+    this.buildLegendPatrol();
+  }
+
+  private buildStrongholdPatrol(): void {
+    // Stronghold: 3 patrol paths along walls
+    for (let i = 0; i < 3; i++) {
+      const angle1 = (i / 6) * Math.PI * 2;
+      const angle2 = ((i + 1) / 6) * Math.PI * 2;
+      const r = 6;
+      this.STRONGHOLD_PATROL.push([
+        { x: Math.cos(angle1) * r, y: 3, z: Math.sin(angle1) * r },
+        { x: Math.cos(angle2) * r, y: 3, z: Math.sin(angle2) * r }
+      ]);
+    }
   }
 
   private buildFortressPatrol(): void {
@@ -141,6 +175,19 @@ export class ActorManager {
     }
   }
 
+  private buildPalacePatrol(): void {
+    // Palace: 4 wide patrol paths
+    for (let i = 0; i < 4; i++) {
+      const angle1 = (i / 4) * Math.PI * 2;
+      const angle2 = ((i + 1) / 4) * Math.PI * 2;
+      const r = 10;
+      this.PALACE_PATROL.push([
+        { x: Math.cos(angle1) * r, y: 4.5, z: Math.sin(angle1) * r },
+        { x: Math.cos(angle2) * r, y: 4.5, z: Math.sin(angle2) * r }
+      ]);
+    }
+  }
+
   private buildCitadelPatrol(): void {
     for (let i = 0; i < 6; i++) {
       const angle1 = (i / 6) * Math.PI * 2;
@@ -149,6 +196,32 @@ export class ActorManager {
       this.CITADEL_PATROL.push([
         { x: Math.cos(angle1) * r, y: 5, z: Math.sin(angle1) * r },
         { x: Math.cos(angle2) * r, y: 5, z: Math.sin(angle2) * r }
+      ]);
+    }
+  }
+
+  private buildEmpirePatrol(): void {
+    // Empire: 5 patrol paths along massive walls
+    for (let i = 0; i < 5; i++) {
+      const angle1 = (i / 5) * Math.PI * 2;
+      const angle2 = ((i + 1) / 5) * Math.PI * 2;
+      const r = 14;
+      this.EMPIRE_PATROL.push([
+        { x: Math.cos(angle1) * r, y: 6, z: Math.sin(angle1) * r },
+        { x: Math.cos(angle2) * r, y: 6, z: Math.sin(angle2) * r }
+      ]);
+    }
+  }
+
+  private buildLegendPatrol(): void {
+    // Legend: 6 patrol paths along legendary fortifications
+    for (let i = 0; i < 6; i++) {
+      const angle1 = (i / 6) * Math.PI * 2;
+      const angle2 = ((i + 1) / 6) * Math.PI * 2;
+      const r = 16;
+      this.LEGEND_PATROL.push([
+        { x: Math.cos(angle1) * r, y: 7, z: Math.sin(angle1) * r },
+        { x: Math.cos(angle2) * r, y: 7, z: Math.sin(angle2) * r }
       ]);
     }
   }
@@ -218,7 +291,7 @@ export class ActorManager {
    */
   private createBirdTemplate(): void {
     const group = new THREE.Group();
-    const birdMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.7 });
+    const birdMat = new THREE.MeshStandardMaterial({ color: 0x6a5030, roughness: 0.7 });
 
     // Body
     const body = new THREE.Mesh(
@@ -230,7 +303,7 @@ export class ActorManager {
 
     // Left wing
     const wingGeom = new THREE.PlaneGeometry(0.2, 0.06);
-    const wingMat = new THREE.MeshStandardMaterial({ color: 0x333333, side: THREE.DoubleSide });
+    const wingMat = new THREE.MeshStandardMaterial({ color: 0x7a6040, side: THREE.DoubleSide });
     const leftWing = new THREE.Mesh(wingGeom, wingMat);
     leftWing.position.set(0, 0.02, 0.08);
     leftWing.name = 'leftWing';
@@ -264,23 +337,62 @@ export class ActorManager {
     // Only recalculate when tier changes
     const positions: THREE.Vector3[] = [];
     switch (state.tier) {
+      case 'hut':
+        positions.push(new THREE.Vector3(0, 3, 0));
+        break;
+      case 'cottage':
+        positions.push(new THREE.Vector3(0.8, 3.5, 0.3));
+        break;
+      case 'tower':
+        positions.push(new THREE.Vector3(0, 4.5, 0));
+        break;
       case 'keep':
         positions.push(new THREE.Vector3(0.5, 5.5, 0.5));
+        break;
+      case 'manor':
+        positions.push(new THREE.Vector3(1, 5, -1));
+        positions.push(new THREE.Vector3(-1.5, 5, 1));
         break;
       case 'castle':
         positions.push(new THREE.Vector3(1, 6, -1));
         positions.push(new THREE.Vector3(-2, 3, 5));
+        break;
+      case 'stronghold':
+        positions.push(new THREE.Vector3(0, 7, 0));
+        positions.push(new THREE.Vector3(3, 4, 2));
+        positions.push(new THREE.Vector3(-3, 4, -2));
         break;
       case 'fortress':
         positions.push(new THREE.Vector3(0, 8, 0));
         positions.push(new THREE.Vector3(3, 4, 3));
         positions.push(new THREE.Vector3(-3, 4, -3));
         break;
+      case 'palace':
+        positions.push(new THREE.Vector3(0, 10, 0));
+        positions.push(new THREE.Vector3(4, 5, 2));
+        positions.push(new THREE.Vector3(-4, 5, -2));
+        positions.push(new THREE.Vector3(2, 5, -4));
+        break;
       case 'citadel':
         positions.push(new THREE.Vector3(0, 15, 0));
         positions.push(new THREE.Vector3(4, 6, 0));
         positions.push(new THREE.Vector3(-4, 6, 0));
         positions.push(new THREE.Vector3(0, 6, 4));
+        break;
+      case 'empire':
+        positions.push(new THREE.Vector3(0, 18, 0));
+        positions.push(new THREE.Vector3(5, 7, 0));
+        positions.push(new THREE.Vector3(-5, 7, 0));
+        positions.push(new THREE.Vector3(0, 7, 5));
+        positions.push(new THREE.Vector3(0, 7, -5));
+        break;
+      case 'legend':
+        positions.push(new THREE.Vector3(0, 22, 0));
+        positions.push(new THREE.Vector3(6, 8, 3));
+        positions.push(new THREE.Vector3(-6, 8, -3));
+        positions.push(new THREE.Vector3(3, 8, 6));
+        positions.push(new THREE.Vector3(-3, 8, -6));
+        positions.push(new THREE.Vector3(0, 8, 0));
         break;
     }
     this.chimneyPositions = positions;
@@ -290,34 +402,47 @@ export class ActorManager {
    * Update guard patrol
    */
   private updateGuards(state: RenderState, dt: number): void {
-    // Determine target guard count
-    const isPostGrad = state.hasGraduated && !state.isZombie;
+    // Determine target guard count — driven by population density
+    const isPostGrad = state.hasGraduated;
+    const pop = state.smoothPopulation ?? state.populationDensity ?? 0;
     let targetCount = 0;
     let patrols: PatrolPoint[][] = [];
 
     if (isPostGrad) {
+      // Base patrol slots per tier
+      let baseSlots = 0;
       switch (state.tier) {
+        case 'hut':
+          baseSlots = 1; patrols = this.HUT_PATROL; break;
+        case 'cottage':
+          baseSlots = 1; patrols = this.COTTAGE_PATROL; break;
+        case 'tower':
+          baseSlots = 1; patrols = this.TOWER_PATROL; break;
         case 'keep':
-          targetCount = state.activityLevel === 'dead' ? 0 : 1;
-          patrols = this.KEEP_PATROL;
-          break;
+          baseSlots = 1; patrols = this.KEEP_PATROL; break;
+        case 'manor':
+          baseSlots = 2; patrols = this.MANOR_PATROL; break;
         case 'castle':
-          targetCount = state.activityLevel === 'dead' ? 0 : 2;
-          patrols = this.CASTLE_PATROL;
-          break;
+          baseSlots = 2; patrols = this.CASTLE_PATROL; break;
+        case 'stronghold':
+          baseSlots = 3; patrols = this.STRONGHOLD_PATROL; break;
         case 'fortress':
-          targetCount = state.activityLevel === 'dead' ? 0 : 3;
-          patrols = this.FORTRESS_PATROL;
-          break;
+          baseSlots = 3; patrols = this.FORTRESS_PATROL; break;
+        case 'palace':
+          baseSlots = 4; patrols = this.PALACE_PATROL; break;
         case 'citadel':
-          targetCount = state.activityLevel === 'dead' ? 0 : 4;
-          patrols = this.CITADEL_PATROL;
-          break;
+          baseSlots = 4; patrols = this.CITADEL_PATROL; break;
+        case 'empire':
+          baseSlots = 5; patrols = this.EMPIRE_PATROL; break;
+        case 'legend':
+          baseSlots = 6; patrols = this.LEGEND_PATROL; break;
       }
+      // Population density drives how many guard slots are filled
+      // density < 0.1: 0 guards (abandoned), density 0.5: ~half, density 1.0: all + bonus
+      targetCount = pop < 0.1 ? 0 : Math.ceil(baseSlots * Math.min(1.5, pop * 1.5));
     }
 
-    // Adjust volume-based modifiers
-    if (state.activityLevel === 'booming') targetCount += 1;
+    // Decay still reduces guards (crumbling walls = fewer patrols)
     if (state.smoothDecay > 0.6) targetCount = Math.max(0, targetCount - 1);
 
     // Spawn guards
@@ -350,10 +475,8 @@ export class ActorManager {
       });
     }
 
-    // Animate guards
-    const speedMul = state.activityLevel === 'booming' ? 1.5 :
-      state.activityLevel === 'active' ? 1.0 :
-        state.activityLevel === 'slow' ? 0.6 : 0.3;
+    // Animate guards — speed scales with population density
+    const speedMul = 0.4 + pop * 1.2;
 
     for (const guard of this.guards) {
       guard.animPhase += dt * 3 * speedMul;
@@ -390,12 +513,11 @@ export class ActorManager {
    * Update birds
    */
   private updateBirds(state: RenderState, dt: number): void {
-    // Spawn birds occasionally
+    // Spawn birds occasionally — birds gather where there's food (people = scraps)
+    const pop = state.smoothPopulation ?? state.populationDensity ?? 0;
     this.birdSpawnTimer -= dt;
-    if (this.birdSpawnTimer <= 0 && !state.isZombie && !state.isCursed) {
-      const spawnChance = state.activityLevel === 'booming' ? 0.4 :
-        state.activityLevel === 'active' ? 0.3 :
-          state.activityLevel === 'slow' ? 0.15 : 0.05;
+    if (this.birdSpawnTimer <= 0) {
+      const spawnChance = pop * 0.5;
 
       if (this.random() < spawnChance && this.birds.length < 6) {
         this.spawnBird();
@@ -489,11 +611,11 @@ export class ActorManager {
    * Uses batched Points system — 1 draw call for all smoke.
    */
   private updateSmoke(state: RenderState, dt: number): void {
-    // Only emit smoke when active (not zombie/dead)
-    if (state.activityLevel !== 'dead' && !state.isZombie) {
-      const emitRate = state.activityLevel === 'booming' ? 3 :
-        state.activityLevel === 'active' ? 2 :
-          state.activityLevel === 'slow' ? 1 : 0.5;
+    // Smoke emission driven by population density — more people = more cooking/fires
+    const pop = state.smoothPopulation ?? state.populationDensity ?? 0;
+    if (pop > 0.05) {
+      // 0 at ghost town, up to 4 per chimney per second at peak activity
+      const emitRate = pop * 4;
 
       for (const chimneyPos of this.chimneyPositions) {
         if (this.random() < emitRate * dt && this.smokeParticles.length < this.maxSmoke) {

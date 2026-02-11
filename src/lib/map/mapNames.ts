@@ -20,18 +20,34 @@ export interface RegionNames {
 
 // ── Castle name prefixes by tier ──
 const TIER_PREFIXES: Record<CastleTier, string[]> = {
-  keep:     ['Stone', 'Wood', 'Mud', 'Thorn', 'Ash'],
-  castle:   ['Iron', 'Oak', 'Grey', 'Ember', 'Storm'],
-  fortress: ['High', 'Grand', 'Silver', 'Crown', 'Steel'],
-  citadel:  ['Golden', 'Ancient', 'Radiant', 'Eternal', 'Celestial'],
+  hut:        ['Mud', 'Straw', 'Clay', 'Moss', 'Bramble'],
+  cottage:    ['Wood', 'Thorn', 'Ash', 'Reed', 'Pine'],
+  tower:      ['Stone', 'Flint', 'Grey', 'Pale', 'Iron'],
+  keep:       ['Iron', 'Oak', 'Ember', 'Dark', 'Storm'],
+  manor:      ['Marble', 'Copper', 'Sage', 'Dusk', 'Vine'],
+  castle:     ['Iron', 'Oak', 'Grey', 'Ember', 'Storm'],
+  stronghold: ['Steel', 'Flame', 'Basalt', 'War', 'Thunder'],
+  fortress:   ['High', 'Grand', 'Silver', 'Crown', 'Steel'],
+  palace:     ['Pearl', 'Rose', 'Ivory', 'Silk', 'Crystal'],
+  citadel:    ['Golden', 'Ancient', 'Radiant', 'Eternal', 'Celestial'],
+  empire:     ['Sovereign', 'Imperial', 'Ascendant', 'Supreme', 'Arcane'],
+  legend:     ['Mythic', 'Divine', 'Transcendent', 'Immortal', 'Legendary'],
 };
 
 // ── Castle name suffixes by tier ──
 const TIER_SUFFIXES: Record<CastleTier, string[]> = {
-  keep:     ['keep', 'hold', 'watch', 'hovel', 'hut'],
-  castle:   ['castle', 'hall', 'tower', 'fort', 'bastion'],
-  fortress: ['fortress', 'stronghold', 'citadel', 'bulwark', 'spire'],
-  citadel:  ['citadel', 'palace', 'sanctum', 'dominion', 'throne'],
+  hut:        ['hut', 'hovel', 'shack', 'den', 'burrow'],
+  cottage:    ['cottage', 'lodge', 'croft', 'hearth', 'cabin'],
+  tower:      ['tower', 'spire', 'watch', 'beacon', 'pillar'],
+  keep:       ['keep', 'hold', 'watch', 'guard', 'redoubt'],
+  manor:      ['manor', 'estate', 'grange', 'villa', 'court'],
+  castle:     ['castle', 'hall', 'tower', 'fort', 'bastion'],
+  stronghold: ['stronghold', 'bulwark', 'rampart', 'ward', 'garrison'],
+  fortress:   ['fortress', 'citadel', 'bulwark', 'spire', 'bastion'],
+  palace:     ['palace', 'court', 'pavilion', 'hall', 'gallery'],
+  citadel:    ['citadel', 'sanctum', 'dominion', 'throne', 'summit'],
+  empire:     ['empire', 'dominion', 'realm', 'sovereignty', 'hegemony'],
+  legend:     ['throne', 'crown', 'sanctum', 'apex', 'pinnacle'],
 };
 
 // ── District names by phase ──
@@ -39,10 +55,6 @@ const PHASE_DISTRICTS: Record<LifePhase, string[]> = {
   construction: ['Scaffold Yard', 'Foundation Quarter', 'Builder\'s Row', 'Timber Ward', 'New Works'],
   graduated:    ['Bastion Rise', 'Herald\'s Ward', 'Gatehouse Quarter', 'Banner Row', 'Covenant Way'],
   thriving:     ['Golden Ward', 'Market Square', 'Flourishing Row', 'Silk Quarter', 'Crown Gate'],
-  declining:    ['Fading Quarter', 'Dusk Row', 'Hollow Ward', 'Waning Gate', 'Rust Alley'],
-  dormant:      ['Silent Quarter', 'Dust Row', 'Forgotten Ward', 'Grey Gate', 'Still Alley'],
-  zombie:       ['Zombie Quarter', 'Dead Row', 'Hollow Gate', 'Rot Ward', 'Bone Alley'],
-  cursed:       ['Cursed Ward', 'Hex Row', 'Shadow Gate', 'Doom Quarter', 'Wither Alley'],
 };
 
 // ── Lore tags by phase ──
@@ -67,34 +79,6 @@ const PHASE_LORE: Record<LifePhase, string[]> = {
     'Prosperity reigns within',
     'The coffers overflow',
     'A beacon in the realm',
-  ],
-  declining:    [
-    'Glory fading like dusk',
-    'The banners hang low',
-    'Once great, now waning',
-    'Shadows creep inward',
-    'The old songs grow quiet',
-  ],
-  dormant:      [
-    'All is still here',
-    'The watchers have left',
-    'Silence upon the walls',
-    'A kingdom in slumber',
-    'No torch burns tonight',
-  ],
-  zombie:       [
-    'The dead walk these halls',
-    'Forsaken by the living',
-    'Only echoes remain',
-    'Ruins of old pump',
-    'None dare enter',
-  ],
-  cursed:       [
-    'Hexed beyond redemption',
-    'A darkness dwells within',
-    'The land itself recoils',
-    'Cursed by the old rug',
-    'Beware the purple fog',
   ],
 };
 

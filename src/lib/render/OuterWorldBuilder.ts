@@ -14,7 +14,7 @@
 import * as THREE from 'three';
 import type { RenderState, CastleTier, ExchangeListing } from '$lib/types';
 import type { WeatherRenderState } from '$lib/state/WeatherState';
-import { getTokenColors, getMaterialWear, categorizeExchanges, getMoodEmissiveScale, type TokenColors, type MaterialWear } from './TokenIdentity';
+import { getTokenColors, getMaterialWear, categorizeExchanges, getMoodEmissiveScale, getExchangeColor, type TokenColors, type MaterialWear } from './TokenIdentity';
 
 interface Villager {
   mesh: THREE.Group;
@@ -71,6 +71,12 @@ export class OuterWorldBuilder {
   // Exchange trade markers (built once per token)
   private tradeMarkerGroup: THREE.Group;
   private tradeMarkersBuilt: boolean = false;
+
+  // Token image texture for banners (loaded async from tokenImageUrl)
+  private textureLoader: THREE.TextureLoader = new THREE.TextureLoader();
+  private tokenImageTexture: THREE.Texture | null = null;
+  private tokenImageUrl: string | null = null;
+  private tokenImageLoading: boolean = false;
 
   // State tracking
   private currentTier: CastleTier | null = null;
@@ -132,10 +138,19 @@ export class OuterWorldBuilder {
 
   private getWallRadius(tier: CastleTier): number {
     switch (tier) {
+      case 'hut': return 2;
+      case 'cottage': return 3;
+      case 'tower': return 3.5;
       case 'keep': return 4;
+      case 'manor': return 5.5;
       case 'castle': return 7;
+      case 'stronghold': return 8.5;
       case 'fortress': return 10;
+      case 'palace': return 12;
       case 'citadel': return 14;
+      case 'empire': return 16;
+      case 'legend': return 18;
+      default: return 7;
     }
   }
 
@@ -146,17 +161,26 @@ export class OuterWorldBuilder {
    */
   private getGateZ(tier: CastleTier): number {
     switch (tier) {
-      case 'keep': return 2;        // door frame at ~z=1.55
-      case 'castle': return 5.25;   // addGate(0, 0, 5.25, ...)
-      case 'fortress': return 8.5;  // addGate(0, 0, 8.5, ...)
-      case 'citadel': return 12.5;  // addGate(0, 0, outerRadius+0.5=12.5, ...)
+      case 'hut': return 1.5;
+      case 'cottage': return 2;
+      case 'tower': return 2;
+      case 'keep': return 2;
+      case 'manor': return 3.5;
+      case 'castle': return 5.25;
+      case 'stronghold': return 7;
+      case 'fortress': return 8.5;
+      case 'palace': return 10.5;
+      case 'citadel': return 12.5;
+      case 'empire': return 14.5;
+      case 'legend': return 16.5;
+      default: return 5.25;
     }
   }
 
   // ─── Paths ────────────────────────────────────────────────
 
   private buildPaths(wallRadius: number, tier: CastleTier): void {
-    if (tier === 'citadel') {
+    if (tier === 'citadel' || tier === 'empire' || tier === 'legend') {
       this.buildLegendaryPaths(wallRadius);
       return;
     }
@@ -481,8 +505,12 @@ export class OuterWorldBuilder {
 
   private buildGardens(wallRadius: number, tier: CastleTier): void {
     // Legendary: fewer, curated gardens placed far from entrance/plazas
-    const isLeg = tier === 'citadel';
-    const gardenCount = tier === 'keep' ? 3 : tier === 'castle' ? 5 : tier === 'fortress' ? 7 : (isLeg ? 4 : 10);
+    const isLeg = tier === 'citadel' || tier === 'empire' || tier === 'legend';
+    const gardenBase: Record<string, number> = {
+      hut: 1, cottage: 2, tower: 2, keep: 3, manor: 4, castle: 5,
+      stronghold: 6, fortress: 7, palace: 8, citadel: 4, empire: 5, legend: 6
+    };
+    const gardenCount = gardenBase[tier] ?? 3;
     const gardenDist = isLeg ? wallRadius + 14 : wallRadius + 8;
 
     for (let i = 0; i < gardenCount; i++) {
@@ -565,9 +593,13 @@ export class OuterWorldBuilder {
   // ─── Market Stalls ────────────────────────────────────────
 
   private buildMarketStalls(wallRadius: number, tier: CastleTier): void {
-    const isLeg = tier === 'citadel';
+    const isLeg = tier === 'citadel' || tier === 'empire' || tier === 'legend';
     // Legendary: drastically fewer stalls — plazas/landmarks carry the scene
-    const stallCount = tier === 'keep' ? 1 : tier === 'castle' ? 3 : tier === 'fortress' ? 5 : (isLeg ? 3 : 8);
+    const stallBase: Record<string, number> = {
+      hut: 0, cottage: 0, tower: 1, keep: 1, manor: 2, castle: 3,
+      stronghold: 4, fortress: 5, palace: 6, citadel: 3, empire: 4, legend: 5
+    };
+    const stallCount = stallBase[tier] ?? 2;
     const stallDist = isLeg ? wallRadius + 12 : wallRadius + 6;
 
     if (isLeg) {
@@ -600,7 +632,7 @@ export class OuterWorldBuilder {
     }
 
     // Some stalls around the ring
-    if (tier !== 'keep') {
+    if (tier !== 'keep' && tier !== 'hut' && tier !== 'cottage' && tier !== 'tower') {
       for (let i = 0; i < Math.min(4, stallCount); i++) {
         const angle = Math.PI / 2 + i * Math.PI / 3 + this.random() * 0.3;
         const stall = this.createStall();
@@ -652,7 +684,7 @@ export class OuterWorldBuilder {
       const goodColor = [0xdaa520, 0xcd853f, 0xf4a460, 0xd2691e][i];
       const good = new THREE.Mesh(
         new THREE.BoxGeometry(0.2 + this.random() * 0.15, 0.15, 0.15),
-        new THREE.MeshStandardMaterial({ color: goodColor, roughness: 0.7 })
+        new THREE.MeshStandardMaterial({ color: goodColor, roughness: 0.65, emissive: new THREE.Color(goodColor), emissiveIntensity: 0.02 })
       );
       good.position.set(-0.6 + i * 0.4, 0.88, 0);
       stall.add(good);
@@ -664,9 +696,13 @@ export class OuterWorldBuilder {
   // ─── Benches ──────────────────────────────────────────────
 
   private buildBenches(wallRadius: number, tier: CastleTier): void {
-    const isLeg = tier === 'citadel';
+    const isLeg = tier === 'citadel' || tier === 'empire' || tier === 'legend';
     // Legendary: fewer benches, placed away from the ceremonial approach
-    const benchCount = tier === 'keep' ? 2 : tier === 'castle' ? 4 : tier === 'fortress' ? 6 : (isLeg ? 4 : 10);
+    const benchBase: Record<string, number> = {
+      hut: 0, cottage: 1, tower: 1, keep: 2, manor: 3, castle: 4,
+      stronghold: 5, fortress: 6, palace: 8, citadel: 4, empire: 6, legend: 8
+    };
+    const benchCount = benchBase[tier] ?? 3;
 
     for (let i = 0; i < benchCount; i++) {
       let angle: number;
@@ -715,9 +751,9 @@ export class OuterWorldBuilder {
 
   private buildBillboards(wallRadius: number, tier: CastleTier): void {
     // Legendary: no billboards — they break the regal, ceremonial feel
-    if (tier === 'citadel') return;
+    if (tier === 'citadel' || tier === 'empire' || tier === 'legend' || tier === 'palace') return;
 
-    const count = tier === 'keep' ? 1 : tier === 'castle' ? 2 : tier === 'fortress' ? 3 : 5;
+    const count = tier === 'hut' ? 0 : tier === 'cottage' ? 0 : tier === 'tower' ? 1 : tier === 'keep' ? 1 : tier === 'manor' ? 2 : tier === 'castle' ? 2 : tier === 'stronghold' ? 3 : tier === 'fortress' ? 3 : 5;
 
     for (let i = 0; i < count; i++) {
       const angle = this.random() * Math.PI * 2;
@@ -778,8 +814,12 @@ export class OuterWorldBuilder {
 
   private buildLampposts(wallRadius: number, tier: CastleTier): void {
     // Legendary: fewer lampposts — plaza torches and landmark torches handle lighting
-    const isLeg = tier === 'citadel';
-    const count = tier === 'keep' ? 2 : tier === 'castle' ? 4 : tier === 'fortress' ? 6 : (isLeg ? 4 : 10);
+    const isLeg = tier === 'citadel' || tier === 'empire' || tier === 'legend';
+    const countBase: Record<string, number> = {
+      hut: 1, cottage: 1, tower: 2, keep: 2, manor: 3, castle: 4,
+      stronghold: 5, fortress: 6, palace: 8, citadel: 4, empire: 6, legend: 8
+    };
+    const count = countBase[tier] ?? 3;
 
     for (let i = 0; i < count; i++) {
       let angle: number;
@@ -830,22 +870,28 @@ export class OuterWorldBuilder {
 
   // ─── Villagers (animated) ──────────────────────────────────
 
-  private getMaxVillagers(tier: CastleTier, activityLevel: string, isLegendary: boolean): number {
+  private getMaxVillagers(tier: CastleTier, activityLevel: string, isLegendary: boolean, populationDensity: number): number {
     const base: Record<string, number> = {
-      'keep': 4, 'castle': 8, 'fortress': 14, 'citadel': 22
+      hut: 1, cottage: 1, tower: 2, keep: 2, manor: 3, castle: 4,
+      stronghold: 6, fortress: 8, palace: 10, citadel: 14, empire: 16, legend: 20
     };
-    let count = base[tier] || 8;
+    let count = base[tier] || 4;
 
-    if (activityLevel === 'booming') count += 6;
-    else if (activityLevel === 'active') count += 3;
-    else if (activityLevel === 'dying' || activityLevel === 'dead') count = Math.floor(count * 0.3);
+    // Population density is the PRIMARY driver of villager count.
+    // density 0 → base×0.1 (ghost town), 0.5 → base×1.0, 1.0 → base×2.5
+    const densityMultiplier = 0.1 + populationDensity * 2.4;
+    count = Math.round(count * densityMultiplier);
 
-    if (isLegendary) count += 10;
+    // Activity level still adds a slight modifier for volume-based momentum
+    if (activityLevel === 'booming') count += 2;
+    else if (activityLevel === 'dead') count = Math.max(0, count - 1);
 
-    return count;
+    if (isLegendary) count += Math.round(populationDensity * 10);
+
+    return Math.max(0, count);
   }
 
-  private spawnVillager(tier: CastleTier): void {
+  private spawnVillager(tier: CastleTier, populationDensity: number = 0.5): void {
     const wallRadius = this.getWallRadius(tier);
     const mesh = this.createVillagerMesh();
 
@@ -856,19 +902,31 @@ export class OuterWorldBuilder {
     const z = Math.cos(angle) * dist;
     mesh.position.set(x, 0, z);
 
-    const behaviors: Villager['behavior'][] = ['wander', 'shop', 'watch', 'play', 'wander', 'wander'];
+    // Behavior depends on density: bustling → active behaviors, ghost town → aimless wandering
+    let behaviors: Villager['behavior'][];
+    if (populationDensity > 0.6) {
+      behaviors = ['shop', 'play', 'shop', 'watch', 'wander', 'play'];
+    } else if (populationDensity > 0.3) {
+      behaviors = ['wander', 'shop', 'watch', 'wander', 'play', 'wander'];
+    } else {
+      behaviors = ['wander', 'wander', 'wander', 'sit', 'wander', 'wander'];
+    }
     const behavior = behaviors[Math.floor(this.random() * behaviors.length)];
 
     // Pick a random target
     const tAngle = this.random() * Math.PI * 2;
     const tDist = wallRadius + 4 + this.random() * 14;
 
+    // Movement speed scales with density (bustling = energetic, abandoned = sluggish)
+    const baseSpeed = 0.4 + populationDensity * 0.8;
+    const speedVariance = this.random() * 0.4;
+
     this.group.add(mesh);
     this.villagers.push({
       mesh,
       targetX: Math.sin(tAngle) * tDist,
       targetZ: Math.cos(tAngle) * tDist,
-      speed: 0.6 + this.random() * 0.8,
+      speed: baseSpeed + speedVariance,
       behavior,
       timer: 3 + this.random() * 8,
       phase: this.random() * Math.PI * 2
@@ -1238,9 +1296,63 @@ export class OuterWorldBuilder {
   }
 
   /**
+   * Load and cache the token's image as a texture for banner fabric.
+   * Falls back to solid color if loading fails (CORS, 404, etc.).
+   */
+  private loadTokenImageTexture(imageUrl: string): void {
+    if (this.tokenImageUrl === imageUrl) return;
+    if (this.tokenImageLoading) return;
+
+    this.tokenImageUrl = imageUrl;
+    this.tokenImageLoading = true;
+
+    this.textureLoader.setCrossOrigin('anonymous');
+    this.textureLoader.load(
+      imageUrl,
+      (texture) => {
+        if (this.tokenImageTexture) {
+          this.tokenImageTexture.dispose();
+        }
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        this.tokenImageTexture = texture;
+        this.tokenImageLoading = false;
+        this.applyTokenTextureToExistingBanners();
+      },
+      undefined,
+      () => {
+        this.tokenImageLoading = false;
+        this.tokenImageUrl = null;
+      }
+    );
+  }
+
+  /**
+   * Retroactively apply loaded token image texture to all existing banner fabric meshes.
+   */
+  private applyTokenTextureToExistingBanners(): void {
+    if (!this.tokenImageTexture) return;
+
+    const targets = [this.landmarkGroup, this.group];
+    for (const parent of targets) {
+      parent.traverse((child) => {
+        if (child.name === 'bannerFabric' && child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          mat.map = this.tokenImageTexture;
+          mat.transparent = true;
+          mat.alphaTest = 0.1;
+          mat.needsUpdate = true;
+        }
+      });
+    }
+  }
+
+  /**
    * Create a banner pole with fabric colored by token identity.
    * The banner fabric uses the token's sigil color — every token
    * gets a unique medieval palette derived from its symbol.
+   * If a token image texture is loaded, it's applied to the fabric.
    * Trim/finial metal reflects token health (gold → iron as decay increases).
    */
   private createBanner(): THREE.Group {
@@ -1272,13 +1384,19 @@ export class OuterWorldBuilder {
     const fabricColor = new THREE.Color(this.tokenColors.fabric);
     fabricColor.multiplyScalar(colorVariation);
 
+    const fabricMatOptions: THREE.MeshStandardMaterialParameters = {
+      color: fabricColor,
+      roughness: 0.65 + this.materialWear.roughnessBoost,
+      side: THREE.DoubleSide,
+    };
+    if (this.tokenImageTexture) {
+      fabricMatOptions.map = this.tokenImageTexture;
+      fabricMatOptions.transparent = true;
+      fabricMatOptions.alphaTest = 0.1;
+    }
     const fabric = new THREE.Mesh(
       new THREE.PlaneGeometry(0.6, 1.2),
-      new THREE.MeshStandardMaterial({
-        color: fabricColor,
-        roughness: 0.65 + this.materialWear.roughnessBoost,
-        side: THREE.DoubleSide
-      })
+      new THREE.MeshStandardMaterial(fabricMatOptions)
     );
     fabric.position.set(0, 2.1, 0.05);
     fabric.name = 'bannerFabric';
@@ -1920,6 +2038,30 @@ export class OuterWorldBuilder {
   // Small CEX = medium flag along the avenue
   // DEX = small marker post along the ring road
 
+  /**
+   * Render exchange name onto a small canvas for use as a texture label.
+   */
+  private createExchangeNameTexture(name: string, width = 128, height = 48): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d')!;
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = 'rgba(255, 248, 230, 0.85)';
+    ctx.font = `bold ${Math.floor(height * 0.5)}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const displayName = name.length > 10 ? name.slice(0, 9) + '.' : name;
+    ctx.fillText(displayName, width / 2, height / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+
   private buildTradeMarkers(state: RenderState): void {
     if (this.tradeMarkersBuilt) return;
     this.tradeMarkersBuilt = true;
@@ -1936,13 +2078,12 @@ export class OuterWorldBuilder {
     });
 
     // ─── Major CEX: tall allied banners near grand plaza entrance ───
-    // These are the most prestigious — placed flanking the main avenue
-    // just outside the grand plaza, symmetrically.
+    // Exchange-specific colors with name labels on pennants.
     major.forEach((exchange, i) => {
       const side = i % 2 === 0 ? 1 : -1;
       const offset = Math.floor(i / 2) * 2.5;
-      const z = RING_R + 6.5 + offset; // Just past grand plaza edge
-      const x = side * 4.5; // Outside the main avenue width
+      const z = RING_R + 6.5 + offset;
+      const x = side * 4.5;
 
       const marker = new THREE.Group();
       marker.position.set(x, 0, z);
@@ -1956,9 +2097,8 @@ export class OuterWorldBuilder {
       pole.castShadow = true;
       marker.add(pole);
 
-      // Large pennant — accent color (exchange identity abstracted)
-      const pennantColor = new THREE.Color(this.tokenColors.accent);
-      pennantColor.offsetHSL(i * 0.05, 0, 0); // Slight hue variation per exchange
+      // Large pennant — exchange-specific color
+      const pennantColor = new THREE.Color(getExchangeColor(exchange.name));
       const pennant = new THREE.Mesh(
         new THREE.PlaneGeometry(0.8, 1.4),
         new THREE.MeshStandardMaterial({
@@ -1968,6 +2108,19 @@ export class OuterWorldBuilder {
       pennant.position.set(0, 2.6, 0.05);
       pennant.name = 'tradeMarkerFabric';
       marker.add(pennant);
+
+      // Name label below pennant
+      const nameTexture = this.createExchangeNameTexture(exchange.name);
+      const nameLabel = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.7, 0.25),
+        new THREE.MeshBasicMaterial({
+          map: nameTexture, transparent: true,
+          side: THREE.DoubleSide, depthWrite: false,
+        })
+      );
+      nameLabel.position.set(0, 1.8, 0.06);
+      nameLabel.name = 'tradeMarkerLabel';
+      marker.add(nameLabel);
 
       // Gold cap
       const cap = new THREE.Mesh(
@@ -1979,14 +2132,14 @@ export class OuterWorldBuilder {
       cap.position.y = 3.55;
       marker.add(cap);
 
-      marker.rotation.y = side > 0 ? -0.1 : 0.1; // Slight inward tilt
+      marker.rotation.y = side > 0 ? -0.1 : 0.1;
       this.tradeMarkerGroup.add(marker);
     });
 
     // ─── Small CEX: medium markers along the avenue ───
     minor.forEach((exchange, i) => {
       const side = i % 2 === 0 ? 1 : -1;
-      const z = RING_R + 12 + i * 2; // Further along the avenue
+      const z = RING_R + 12 + i * 2;
       const x = side * 3.8;
 
       const marker = new THREE.Group();
@@ -1999,9 +2152,8 @@ export class OuterWorldBuilder {
       pole.position.y = 1.25;
       marker.add(pole);
 
-      // Smaller flag
-      const flagColor = new THREE.Color(this.tokenColors.primary);
-      flagColor.offsetHSL(i * 0.08, -0.1, 0.05);
+      // Exchange-specific colored flag
+      const flagColor = new THREE.Color(getExchangeColor(exchange.name));
       const flag = new THREE.Mesh(
         new THREE.PlaneGeometry(0.5, 0.8),
         new THREE.MeshStandardMaterial({
@@ -2012,12 +2164,25 @@ export class OuterWorldBuilder {
       flag.name = 'tradeMarkerFabric';
       marker.add(flag);
 
+      // Smaller name label
+      const nameTexture = this.createExchangeNameTexture(exchange.name, 96, 32);
+      const nameLabel = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.45, 0.18),
+        new THREE.MeshBasicMaterial({
+          map: nameTexture, transparent: true,
+          side: THREE.DoubleSide, depthWrite: false,
+        })
+      );
+      nameLabel.position.set(0, 1.4, 0.05);
+      nameLabel.name = 'tradeMarkerLabel';
+      marker.add(nameLabel);
+
       this.tradeMarkerGroup.add(marker);
     });
 
     // ─── DEX: small post markers along the ring road ───
+    // Shield color from exchange identity, no name labels (too small).
     dex.forEach((exchange, i) => {
-      // Distribute evenly around the ring, avoiding main axis and plazas
       const angle = Math.PI * 0.1 + (i / Math.max(dex.length, 1)) * Math.PI * 0.8;
       const side = i % 2 === 0 ? 1 : -1;
       const a = angle * side;
@@ -2027,7 +2192,6 @@ export class OuterWorldBuilder {
       const marker = new THREE.Group();
       marker.position.set(x, 0, z);
 
-      // Short post with shield marker
       const post = new THREE.Mesh(
         new THREE.CylinderGeometry(0.03, 0.04, 1.5, 6),
         markerWoodMat
@@ -2035,9 +2199,8 @@ export class OuterWorldBuilder {
       post.position.y = 0.75;
       marker.add(post);
 
-      // Small shield/emblem
-      const shieldColor = new THREE.Color(this.tokenColors.fabric);
-      shieldColor.offsetHSL(i * 0.06, -0.05, 0.08);
+      // Exchange-specific shield color
+      const shieldColor = new THREE.Color(getExchangeColor(exchange.name));
       const shield = new THREE.Mesh(
         new THREE.CircleGeometry(0.2, 6),
         new THREE.MeshStandardMaterial({
@@ -2056,8 +2219,16 @@ export class OuterWorldBuilder {
     while (this.tradeMarkerGroup.children.length > 0) {
       const child = this.tradeMarkerGroup.children[0];
       this.tradeMarkerGroup.remove(child);
-      if (child instanceof THREE.Group) this.disposeGroup(child);
-      else if (child instanceof THREE.Mesh) {
+      if (child instanceof THREE.Group) {
+        // Dispose canvas textures from name labels
+        child.traverse((c) => {
+          if (c instanceof THREE.Mesh) {
+            const mat = c.material as THREE.Material & { map?: THREE.Texture };
+            if (mat.map) mat.map.dispose();
+          }
+        });
+        this.disposeGroup(child);
+      } else if (child instanceof THREE.Mesh) {
         child.geometry.dispose();
         if (child.material instanceof THREE.Material) child.material.dispose();
       }
@@ -2430,6 +2601,11 @@ export class OuterWorldBuilder {
       this.materialWear = getMaterialWear(state);
     }
 
+    // Load token image for banner textures (lazy, cached)
+    if (state.tokenImageUrl && state.tokenImageUrl !== this.tokenImageUrl) {
+      this.loadTokenImageTexture(state.tokenImageUrl);
+    }
+
     // Build world structures when tier changes
     if (state.tier !== this.builtForTier && state.hasGraduated) {
       this.buildOuterWorld(state.tier);
@@ -2501,20 +2677,23 @@ export class OuterWorldBuilder {
       this.tradeMarkerGroup.visible = state.hasGraduated && state.exchangeCount > 0;
     }
 
-    // Manage villager population
+    // Manage villager population — driven by transaction-based population density
+    const pop = state.smoothPopulation ?? state.populationDensity ?? 0;
     this.maxVillagers = this.getMaxVillagers(
       state.tier,
       state.activityLevel,
-      state.isLegendary
+      state.isLegendary,
+      pop
     );
 
-    // Don't spawn villagers in zombie/cursed (ghost town feel)
-    if (!state.isZombie && !state.isCursed) {
-      this.spawnTimer -= state.deltaTime / 1000;
-      if (this.spawnTimer <= 0 && this.villagers.length < this.maxVillagers) {
-        this.spawnVillager(state.tier);
-        this.spawnTimer = 0.5 + this.random() * 1.5;
-      }
+    this.spawnTimer -= state.deltaTime / 1000;
+    if (this.spawnTimer <= 0 && this.villagers.length < this.maxVillagers) {
+      this.spawnVillager(state.tier, pop);
+      // Spawn rate scales with density: bustling → fast spawns, ghost town → slow
+      const spawnInterval = pop > 0.6 ? 0.3 + this.random() * 0.7
+        : pop > 0.3 ? 0.5 + this.random() * 1.5
+        : 2 + this.random() * 3;
+      this.spawnTimer = spawnInterval;
     }
 
     // Remove excess villagers
@@ -2616,10 +2795,21 @@ export class OuterWorldBuilder {
     this.builtForTier = null;
     this.currentTier = null;
     this.spawnTimer = 0;
+    // Clear token image cache
+    if (this.tokenImageTexture) {
+      this.tokenImageTexture.dispose();
+      this.tokenImageTexture = null;
+    }
+    this.tokenImageUrl = null;
+    this.tokenImageLoading = false;
   }
 
   dispose(): void {
     this.clearStructures();
+    if (this.tokenImageTexture) {
+      this.tokenImageTexture.dispose();
+      this.tokenImageTexture = null;
+    }
     this.scene.remove(this.group);
   }
 }

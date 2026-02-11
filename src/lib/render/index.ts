@@ -1,6 +1,5 @@
 export { WorldRenderer3D } from './WorldRenderer3D';
 export { CastleMeshBuilder } from './CastleMeshBuilder';
-export { CreatureMeshBuilder } from './CreatureMeshBuilder';
 export { EnvironmentBuilder } from './EnvironmentBuilder';
 export { EffectsManager } from './EffectsManager';
 export { ActorManager } from './ActorManager';

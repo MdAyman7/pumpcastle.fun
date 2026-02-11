@@ -226,8 +226,10 @@ export class MusicManager {
 
   private moodFromState(s: RenderState): MusicMood {
     if (s.isLegendary && s.smoothDecay < 0.6) return 'epic';
-    if (s.isCursed || s.isZombie) return 'eerie';
-    if ((s.phase === 'declining' || s.phase === 'dormant') && s.smoothDecay > 0.4) return 'somber';
+    // Low population + high decay = eerie mood (activity-driven)
+    const pop = s.populationDensity ?? s.smoothPopulation ?? 0.5;
+    if (pop < 0.1 && s.smoothDecay > 0.5) return 'eerie';
+    if (s.smoothDecay > 0.6) return 'somber';
     if (s.phase === 'construction') return 'calm';
     if (s.phase === 'thriving' || s.phase === 'graduated') return 'warm';
     if (s.isLegendary) return 'epic';

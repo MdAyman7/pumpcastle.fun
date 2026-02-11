@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import type { RenderState, CastleTier } from '$lib/types';
 import type { WeatherRenderState } from '$lib/state/WeatherState';
 import { qualitySettings } from './QualitySettings';
+import { getPriceMoodColor } from './TokenIdentity';
 
 export class EnvironmentBuilder {
   private scene: THREE.Scene;
@@ -45,8 +46,8 @@ export class EnvironmentBuilder {
     this.scene.add(this.environmentGroup);
 
     this.groundMaterial = new THREE.MeshStandardMaterial({
-      color: 0x5a9055,
-      roughness: 0.82,
+      color: 0x5e9658,
+      roughness: 0.78,
       metalness: 0.0,
       vertexColors: true
     });
@@ -61,18 +62,18 @@ export class EnvironmentBuilder {
     // 6 foliage color variants × 3 lightness tiers = 18 materials
     // (vs ~90 unique materials in the old system)
     const foliageVariants = [
-      { h: 0.28, s: 0.50, l: 0.32 },
-      { h: 0.30, s: 0.55, l: 0.34 },
-      { h: 0.32, s: 0.48, l: 0.30 },
-      { h: 0.34, s: 0.58, l: 0.36 },
-      { h: 0.29, s: 0.52, l: 0.33 },
-      { h: 0.33, s: 0.45, l: 0.35 },
+      { h: 0.28, s: 0.55, l: 0.32 },
+      { h: 0.30, s: 0.60, l: 0.34 },
+      { h: 0.32, s: 0.52, l: 0.30 },
+      { h: 0.34, s: 0.65, l: 0.36 },
+      { h: 0.29, s: 0.57, l: 0.33 },
+      { h: 0.33, s: 0.50, l: 0.35 },
     ];
     for (const v of foliageVariants) {
       for (const boost of [0, 0.03, 0.06]) {
         this.foliageMaterials.push(new THREE.MeshStandardMaterial({
           color: new THREE.Color().setHSL(v.h, v.s, Math.min(0.42, v.l + boost)),
-          roughness: 0.70,
+          roughness: 0.62,
         }));
       }
     }
@@ -118,8 +119,8 @@ export class EnvironmentBuilder {
     // Adds organic life to what would otherwise be a flat-colored plane.
     const vertexCount = positions.count;
     const colors = new Float32Array(vertexCount * 3);
-    const baseGreen = new THREE.Color(0x5a9055);
-    const brightPatch = new THREE.Color(0x6ca868); // sunlit patch
+    const baseGreen = new THREE.Color(0x5e9658);
+    const brightPatch = new THREE.Color(0x72b06e); // sunlit patch
     const richPatch = new THREE.Color(0x4d8248);   // lush shadow
     const dryPatch = new THREE.Color(0x7a9450);    // slight yellow-green
 
@@ -444,10 +445,19 @@ export class EnvironmentBuilder {
 
   private getWallRadius(tier: CastleTier): number {
     switch (tier) {
+      case 'hut': return 2;
+      case 'cottage': return 3;
+      case 'tower': return 3.5;
       case 'keep': return 4;
+      case 'manor': return 5.5;
       case 'castle': return 7;
+      case 'stronghold': return 8.5;
       case 'fortress': return 10;
+      case 'palace': return 12;
       case 'citadel': return 14;
+      case 'empire': return 16;
+      case 'legend': return 18;
+      default: return 7;
     }
   }
 
@@ -521,24 +531,20 @@ export class EnvironmentBuilder {
     let groundColor = new THREE.Color(0x5a9055);
     const daylightFactor = 1 - state.nightFactor; // 0 at night, 1 at noon
 
-    if (state.isCursed) {
-      groundColor = new THREE.Color(0x3a3a4a);
-    } else if (state.isZombie) {
-      groundColor = new THREE.Color(0x3a4a3a);
-    } else if (state.smoothDecay > 0.5) {
+    if (state.smoothDecay > 0.5) {
       groundColor.lerp(new THREE.Color(0x5a5a4a), (state.smoothDecay - 0.5) * 2);
     }
 
     // ── Daylight boost: sunlit grass is brighter, greener, livelier ───
     // This is the key visual improvement — clear day grass looks alive.
-    if (daylightFactor > 0.4 && !state.isCursed && !state.isZombie) {
+    if (daylightFactor > 0.4) {
       const sunFactor = (daylightFactor - 0.4) / 0.6; // 0–1 in daytime range
       // Bright sunlit green — grass catches warm sunlight
       groundColor.lerp(new THREE.Color(0x68a862), sunFactor * 0.25);
       // Roughness drops in sunlight — grass glistens slightly
-      this.groundMaterial.roughness = 0.82 - sunFactor * 0.10; // 0.82 → 0.72
+      this.groundMaterial.roughness = 0.78 - sunFactor * 0.12; // 0.78 → 0.66
     } else {
-      this.groundMaterial.roughness = 0.82;
+      this.groundMaterial.roughness = 0.78;
     }
 
     // Weather modifiers (subtle, never overpowers token state)
@@ -572,13 +578,27 @@ export class EnvironmentBuilder {
     // ── Night sky illumination on ground ──────────────────────────
     // At night, moonlight and sky glow lift the terrain with a cool blue tint.
     // This prevents the ground from becoming a dark void — it stays readable.
-    if (state.nightFactor > 0.3 && !state.isCursed && !state.isZombie) {
+    if (state.nightFactor > 0.3) {
       const nightLift = (state.nightFactor - 0.3) / 0.7; // 0–1 in night range
       // Blend toward moonlit blue-green (lighter than natural nighttime decay)
       groundColor.lerp(new THREE.Color(0x3a5050), nightLift * 0.20);
       // Slightly increase emissive-like effect via reduced roughness
       // (moonlit wet grass catches more specular highlights from moonlight)
       this.groundMaterial.roughness -= nightLift * 0.05;
+    }
+
+    // ── Price mood ground tint ──────────────────────────────
+    // Subtle green (bullish) or desaturated brown (bearish) tint on ground.
+    // Barely perceptible at 8% max — complements the castle key light shift.
+    if (state.priceMood !== undefined) {
+      const moodColor = getPriceMoodColor(state.priceMood);
+      if (moodColor) {
+        const groundBlend = Math.min(0.08, Math.abs(state.priceMood) * 0.10);
+        const groundMoodColor = state.priceMood > 0
+          ? new THREE.Color(0x60b860).lerp(moodColor, 0.3)
+          : new THREE.Color(0x8a6a4a).lerp(moodColor, 0.3);
+        groundColor.lerp(groundMoodColor, groundBlend);
+      }
     }
 
     // Clamp roughness to sane range — floor of 0.65 ensures terrain
@@ -596,7 +616,7 @@ export class EnvironmentBuilder {
    * Wind sway is still per-tree (cheap — just rotation).
    */
   private updateTrees(state: RenderState, weather?: WeatherRenderState): void {
-    const deadTrees = state.isZombie || state.isCursed || state.smoothDecay > 0.7;
+    const deadTrees = state.smoothDecay > 0.7;
     const daylightFactor = 1 - state.nightFactor;
 
     // ─── Update shared foliage materials (once for all trees) ────────
@@ -634,6 +654,19 @@ export class EnvironmentBuilder {
           }
           if (weather.rainIntensity > 0.1) {
             mat.roughness += (0.55 - mat.roughness) * weather.rainIntensity * 0.02;
+          }
+        }
+
+        // Price mood tint: foliage shifts greener (bullish) or dried brown (bearish)
+        if (state.priceMood !== undefined) {
+          const abs = Math.abs(state.priceMood);
+          if (abs > 0.15) {
+            const foliageBlend = Math.min(0.012, abs * 0.015);
+            if (state.priceMood > 0) {
+              mat.color.lerp(new THREE.Color(0x3aaa40), foliageBlend); // Vibrant green
+            } else {
+              mat.color.lerp(new THREE.Color(0x6a5a2a), foliageBlend); // Autumn brown
+            }
           }
         }
       }
@@ -718,6 +751,19 @@ export class EnvironmentBuilder {
       const baseHillColor = new THREE.Color(0x6a9a65);
       const distantTint = new THREE.Color(0x6a8a7a);
       const baseColor = baseHillColor.clone().lerp(distantTint, distanceFactor * 0.3);
+
+      // Price mood tint: hills shift green (bullish) or desaturated red-brown (bearish)
+      if (state.priceMood !== undefined) {
+        const abs = Math.abs(state.priceMood);
+        if (abs > 0.15) {
+          const hillMoodBlend = Math.min(0.18, abs * 0.22);
+          if (state.priceMood > 0) {
+            baseColor.lerp(new THREE.Color(0x4aaa50), hillMoodBlend); // Lush green
+          } else {
+            baseColor.lerp(new THREE.Color(0x8a6a4a), hillMoodBlend); // Dried brown
+          }
+        }
+      }
 
       // Apply atmospheric perspective
       const targetColor = baseColor.clone().lerp(atmosColor, atmosStrength);

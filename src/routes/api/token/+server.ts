@@ -18,6 +18,7 @@ const mockTokens: Record<string, Partial<TokenData>> = {
     name: 'BuilderCoin', symbol: 'BUILD', marketCap: 500_000, athMarketCap: 600_000,
     priceChange24h: 5, volume24h: 50_000, previousVolume24h: 40_000, holders: 500,
     liquidity: 100_000, isGraduated: false, graduatedAt: null,
+    txnCount24: 120, uniqueTransactions24: 45,
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 2,
     lastTradeTimestamp: Date.now() - 1000 * 60 * 5
   },
@@ -25,6 +26,7 @@ const mockTokens: Record<string, Partial<TokenData>> = {
     name: 'GradToken', symbol: 'GRAD', marketCap: 2_000_000, athMarketCap: 2_500_000,
     priceChange24h: 25, volume24h: 500_000, previousVolume24h: 200_000, holders: 2000,
     liquidity: 500_000, isGraduated: true,
+    txnCount24: 2500, uniqueTransactions24: 800,
     graduatedAt: Date.now() - 1000 * 60 * 2,
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 7,
     lastTradeTimestamp: Date.now() - 1000 * 30
@@ -33,6 +35,7 @@ const mockTokens: Record<string, Partial<TokenData>> = {
     name: 'MoonCastle', symbol: 'MOON', marketCap: 15_000_000, athMarketCap: 18_000_000,
     priceChange24h: 8, volume24h: 2_000_000, previousVolume24h: 1_500_000, holders: 10000,
     liquidity: 3_000_000, isGraduated: true,
+    txnCount24: 15_000, uniqueTransactions24: 4000,
     graduatedAt: Date.now() - 1000 * 60 * 60 * 24 * 30,
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 60,
     lastTradeTimestamp: Date.now() - 1000 * 60,
@@ -46,6 +49,7 @@ const mockTokens: Record<string, Partial<TokenData>> = {
     name: 'FallenKing', symbol: 'FALL', marketCap: 3_000_000, athMarketCap: 50_000_000,
     priceChange24h: -15, volume24h: 100_000, previousVolume24h: 500_000, holders: 5000,
     liquidity: 800_000, isGraduated: true,
+    txnCount24: 200, uniqueTransactions24: 60,
     graduatedAt: Date.now() - 1000 * 60 * 60 * 24 * 90,
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 180,
     lastTradeTimestamp: Date.now() - 1000 * 60 * 60 * 2,
@@ -59,6 +63,7 @@ const mockTokens: Record<string, Partial<TokenData>> = {
     name: 'DeadCoin', symbol: 'DEAD', marketCap: 100_000, athMarketCap: 5_000_000,
     priceChange24h: 0, volume24h: 0, previousVolume24h: 1000, holders: 1000,
     liquidity: 50_000, isGraduated: true,
+    txnCount24: 0, uniqueTransactions24: 0,
     graduatedAt: Date.now() - 1000 * 60 * 60 * 24 * 120,
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 200,
     lastTradeTimestamp: Date.now() - 1000 * 60 * 60 * 12
@@ -67,6 +72,7 @@ const mockTokens: Record<string, Partial<TokenData>> = {
     name: 'LegendCoin', symbol: 'LEGEND', marketCap: 80_000_000, athMarketCap: 150_000_000,
     priceChange24h: -5, volume24h: 10_000_000, previousVolume24h: 12_000_000, holders: 50000,
     liquidity: 20_000_000, isGraduated: true,
+    txnCount24: 50_000, uniqueTransactions24: 12_000,
     graduatedAt: Date.now() - 1000 * 60 * 60 * 24 * 60,
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 90,
     lastTradeTimestamp: Date.now() - 1000 * 60 * 2,
@@ -80,21 +86,44 @@ const mockTokens: Record<string, Partial<TokenData>> = {
       { name: 'Orca', tier: 'dex' }
     ]
   },
-  'cursed123456789012345678901234567890123456': {
-    name: 'CursedRealm', symbol: 'CURSE', marketCap: 50_000, athMarketCap: 10_000_000,
-    priceChange24h: -45, volume24h: 5_000, previousVolume24h: 50_000, holders: 500,
-    liquidity: 20_000, isGraduated: true,
-    graduatedAt: Date.now() - 1000 * 60 * 60 * 24 * 150,
-    createdAt: Date.now() - 1000 * 60 * 60 * 24 * 180,
-    lastTradeTimestamp: Date.now() - 1000 * 60 * 30
+  'cottage1234567890123456789012345678901234': {
+    name: 'HumbleCoin', symbol: 'HMBL', marketCap: 150_000, athMarketCap: 180_000,
+    priceChange24h: 3, volume24h: 8_000, previousVolume24h: 6_000, holders: 300,
+    liquidity: 40_000, isGraduated: true,
+    txnCount24: 80, uniqueTransactions24: 30,
+    graduatedAt: Date.now() - 1000 * 60 * 60 * 24 * 5,
+    createdAt: Date.now() - 1000 * 60 * 60 * 24 * 10,
+    lastTradeTimestamp: Date.now() - 1000 * 60 * 10
   },
-  'fallen123456789012345678901234567890123456': {
-    name: 'StoneWyrm', symbol: 'WYRM', marketCap: 500_000, athMarketCap: 120_000_000,
-    priceChange24h: -20, volume24h: 10_000, previousVolume24h: 100_000, holders: 2000,
-    liquidity: 150_000, isGraduated: true,
-    graduatedAt: Date.now() - 1000 * 60 * 60 * 24 * 200,
-    createdAt: Date.now() - 1000 * 60 * 60 * 24 * 250,
-    lastTradeTimestamp: Date.now() - 1000 * 60 * 60 * 4
+  'palace12345678901234567890123456789012345': {
+    name: 'RoseGold', symbol: 'ROSE', marketCap: 60_000_000, athMarketCap: 75_000_000,
+    priceChange24h: 12, volume24h: 5_000_000, previousVolume24h: 3_000_000, holders: 25000,
+    liquidity: 12_000_000, isGraduated: true,
+    txnCount24: 30_000, uniqueTransactions24: 8000,
+    graduatedAt: Date.now() - 1000 * 60 * 60 * 24 * 45,
+    createdAt: Date.now() - 1000 * 60 * 60 * 24 * 70,
+    lastTradeTimestamp: Date.now() - 1000 * 60,
+    exchanges: [
+      { name: 'Binance', tier: 'cex_major' },
+      { name: 'Raydium', tier: 'dex' },
+      { name: 'Jupiter', tier: 'dex' }
+    ]
+  },
+  'empire12345678901234567890123456789012345': {
+    name: 'SovereignDAO', symbol: 'SOV', marketCap: 600_000_000, athMarketCap: 800_000_000,
+    priceChange24h: -3, volume24h: 30_000_000, previousVolume24h: 35_000_000, holders: 100000,
+    liquidity: 80_000_000, isGraduated: true,
+    txnCount24: 100_000, uniqueTransactions24: 25_000,
+    graduatedAt: Date.now() - 1000 * 60 * 60 * 24 * 90,
+    createdAt: Date.now() - 1000 * 60 * 60 * 24 * 150,
+    lastTradeTimestamp: Date.now() - 1000 * 30,
+    exchanges: [
+      { name: 'Binance', tier: 'cex_major' },
+      { name: 'Coinbase', tier: 'cex_major' },
+      { name: 'Bybit', tier: 'cex_small' },
+      { name: 'Raydium', tier: 'dex' },
+      { name: 'Jupiter', tier: 'dex' }
+    ]
   }
 };
 
@@ -120,6 +149,8 @@ function buildMockTokenData(address: string, mock: Partial<TokenData>): TokenDat
     priceChange24h: mock.priceChange24h || 0,
     volume24h: mock.volume24h || 0,
     previousVolume24h: mock.previousVolume24h || 0,
+    txnCount24: mock.txnCount24 || 0,
+    uniqueTransactions24: mock.uniqueTransactions24 || 0,
     lastTradeTimestamp: mock.lastTradeTimestamp || Date.now(),
     holders: mock.holders || 0,
     liquidity: mock.liquidity || 0,

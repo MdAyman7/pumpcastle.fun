@@ -36,8 +36,9 @@ export class BuilderSystem {
     const activity = {
       level: state.activityLevel,
       volumeRatio: state.volumeRatio,
-      isZombie: state.isZombie,
-      hoursSinceLastTrade: state.hoursSinceLastTrade
+      isZombie: false,
+      hoursSinceLastTrade: state.hoursSinceLastTrade,
+      populationDensity: state.populationDensity ?? 0
     };
 
     const targetCount = getBuilderCount(activity, isConstruction);

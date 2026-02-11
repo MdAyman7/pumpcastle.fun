@@ -94,7 +94,19 @@ export async function fetchCodexToken(address: string): Promise<TokenData | null
     const volume24h = parseFloat(result.volume24 ?? '0') || 0;
     const liquidity = parseFloat(result.liquidity ?? '0') || 0;
     const priceChange24h = parseFloat(result.change24 ?? '0') * 100; // Codex returns as decimal ratio
+    const priceChange1h = result.change1 != null ? parseFloat(result.change1) * 100 : undefined;
+    const high24 = result.high24 != null ? parseFloat(result.high24) : undefined;
+    const low24 = result.low24 != null ? parseFloat(result.low24) : undefined;
     const holders = result.holders ?? 0;
+    const txnCount24 = result.txnCount24 ?? 0;
+    const uniqueTransactions24 = result.uniqueTransactions24 ?? 0;
+    const buyCount24 = result.buyCount24 != null ? result.buyCount24 : undefined;
+    const sellCount24 = result.sellCount24 != null ? result.sellCount24 : undefined;
+    const walletAgeAvg = result.walletAgeAvg != null ? parseFloat(result.walletAgeAvg) : undefined;
+    const walletAgeStd = result.walletAgeStd != null ? parseFloat(result.walletAgeStd) : undefined;
+    const devHeldPercentage = result.devHeldPercentage != null ? result.devHeldPercentage : undefined;
+    const insiderHeldPercentage = result.insiderHeldPercentage != null ? result.insiderHeldPercentage : undefined;
+    const sniperCount = result.sniperCount != null ? result.sniperCount : undefined;
 
     // Compute previous volume from volumeChange24h
     const volumeChange = parseFloat(result.volumeChange24 ?? '0') || 0;
@@ -122,6 +134,9 @@ export async function fetchCodexToken(address: string): Promise<TokenData | null
     const graduatedAt = launchpad?.completedAt
       ? launchpad.completedAt * 1000  // Codex returns Unix seconds
       : (isGraduated ? Date.now() - 1000 * 60 * 60 * 24 * 30 : null);
+
+    // Scam flag (available on result directly or on tokenInfo)
+    const isScam = result.isScam ?? tokenInfo?.isScam ?? tokenInfo?.info?.isScam ?? undefined;
 
     // Created at
     const createdAt = (result.createdAt ?? tokenInfo?.createdAt ?? 0) * 1000; // seconds → ms
@@ -154,8 +169,21 @@ export async function fetchCodexToken(address: string): Promise<TokenData | null
       marketCap,
       athMarketCap,
       priceChange24h,
+      priceChange1h,
+      high24,
+      low24,
       volume24h,
       previousVolume24h: Math.max(0, previousVolume24h),
+      txnCount24,
+      uniqueTransactions24,
+      buyCount24,
+      sellCount24,
+      walletAgeAvg,
+      walletAgeStd,
+      devHeldPercentage,
+      insiderHeldPercentage,
+      sniperCount,
+      isScam,
       lastTradeTimestamp,
       holders,
       liquidity,
@@ -222,7 +250,22 @@ function adaptCodexResult(result: any, address: string): TokenData | null {
     const volume24h = parseFloat(result.volume24 ?? '0') || 0;
     const liquidity = parseFloat(result.liquidity ?? '0') || 0;
     const priceChange24h = parseFloat(result.change24 ?? '0') * 100;
+    const priceChange1h = result.change1 != null ? parseFloat(result.change1) * 100 : undefined;
+    const high24 = result.high24 != null ? parseFloat(result.high24) : undefined;
+    const low24 = result.low24 != null ? parseFloat(result.low24) : undefined;
     const holders = result.holders ?? 0;
+    const txnCount24 = result.txnCount24 ?? 0;
+    const uniqueTransactions24 = result.uniqueTransactions24 ?? 0;
+    const buyCount24 = result.buyCount24 != null ? result.buyCount24 : undefined;
+    const sellCount24 = result.sellCount24 != null ? result.sellCount24 : undefined;
+    const walletAgeAvg = result.walletAgeAvg != null ? parseFloat(result.walletAgeAvg) : undefined;
+    const walletAgeStd = result.walletAgeStd != null ? parseFloat(result.walletAgeStd) : undefined;
+    const devHeldPercentage = result.devHeldPercentage != null ? result.devHeldPercentage : undefined;
+    const insiderHeldPercentage = result.insiderHeldPercentage != null ? result.insiderHeldPercentage : undefined;
+    const sniperCount = result.sniperCount != null ? result.sniperCount : undefined;
+
+    const tokenInfo = result.token;
+    const isScam = result.isScam ?? tokenInfo?.isScam ?? tokenInfo?.info?.isScam ?? undefined;
 
     const volumeChange = parseFloat(result.volumeChange24 ?? '0') || 0;
     const previousVolume24h = volumeChange !== 0
@@ -235,7 +278,6 @@ function adaptCodexResult(result: any, address: string): TokenData | null {
     }
     athMarketCap = Math.max(athMarketCap, marketCap);
 
-    const tokenInfo = result.token;
     const launchpad = tokenInfo?.launchpad;
     const isGraduated = launchpad?.completed ?? (marketCap > 1_000_000);
     const graduatedAt = launchpad?.completedAt
@@ -267,8 +309,21 @@ function adaptCodexResult(result: any, address: string): TokenData | null {
       marketCap,
       athMarketCap,
       priceChange24h,
+      priceChange1h,
+      high24,
+      low24,
       volume24h,
       previousVolume24h: Math.max(0, previousVolume24h),
+      txnCount24,
+      uniqueTransactions24,
+      buyCount24,
+      sellCount24,
+      walletAgeAvg,
+      walletAgeStd,
+      devHeldPercentage,
+      insiderHeldPercentage,
+      sniperCount,
+      isScam,
       lastTradeTimestamp,
       holders,
       liquidity,

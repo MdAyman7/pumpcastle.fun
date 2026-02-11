@@ -50,11 +50,13 @@ export class EnvironmentSystem {
    * Calculate target environment state from world state
    */
   private calculateTargetState(state: RenderState): EnvironmentState {
+    const pop = state.populationDensity ?? state.smoothPopulation ?? 0;
     const activity = {
       level: state.activityLevel,
       volumeRatio: state.volumeRatio,
-      isZombie: state.isZombie,
-      hoursSinceLastTrade: state.hoursSinceLastTrade
+      isZombie: false,
+      hoursSinceLastTrade: state.hoursSinceLastTrade,
+      populationDensity: pop
     };
 
     const activityEnv = getActivityEnvironment(activity);
@@ -63,27 +65,15 @@ export class EnvironmentSystem {
     let fogDensity = activityEnv.fogDensity;
     let fogColor = 'rgba(180, 180, 200, 0.5)';
 
-    // Zombie state: eerie green fog
-    if (state.isZombie) {
-      fogColor = 'rgba(100, 150, 100, 0.6)';
-      fogDensity = Math.max(fogDensity, 0.7);
-    }
-
-    // Cursed state: dark purple fog
-    if (state.isCursed) {
-      fogColor = 'rgba(80, 60, 100, 0.7)';
-      fogDensity = Math.max(fogDensity, 0.8);
+    // Low population = slightly hazier (activity-driven, not label-driven)
+    if (pop < 0.15) {
+      fogDensity = Math.max(fogDensity, 0.4);
+      fogColor = 'rgba(160, 170, 180, 0.5)';
     }
 
     // Sky color based on state
     let skyColor: string;
-    if (state.isCursed) {
-      skyColor = '#2a1a3a'; // Dark purple
-    } else if (state.isZombie) {
-      skyColor = '#3a4a3a'; // Sickly green-grey
-    } else if (state.phase === 'declining') {
-      skyColor = '#8090a0'; // Overcast
-    } else if (state.phase === 'thriving') {
+    if (state.phase === 'thriving') {
       skyColor = '#5a9fd4'; // Bright blue
     } else {
       skyColor = '#87CEEB'; // Default sky blue

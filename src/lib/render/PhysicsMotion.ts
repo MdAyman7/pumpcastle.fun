@@ -136,11 +136,10 @@ export class PhysicsMotion {
    */
   private updateWind(state: RenderState, dt: number, weather?: WeatherRenderState): void {
     // Base wind from activity
-    let targetWind = state.isCursed ? 0.8 :
-      state.isZombie ? 0.15 :
-        state.activityLevel === 'booming' ? 0.5 :
-          state.activityLevel === 'active' ? 0.35 :
-            state.activityLevel === 'slow' ? 0.2 : 0.1;
+    let targetWind =
+      state.activityLevel === 'booming' ? 0.5 :
+        state.activityLevel === 'active' ? 0.35 :
+          state.activityLevel === 'slow' ? 0.2 : 0.1;
 
     // Weather wind modifier (additive, capped)
     if (weather) {

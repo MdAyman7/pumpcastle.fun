@@ -19,8 +19,6 @@ export type AudioCueType =
   | 'new_ath'           // Rising fanfare tone
   | 'legendary_reach'   // Epic horn swell + shimmer
   | 'sudden_dump'       // Low rumble + tension
-  | 'zombie_rise'       // Eerie descending tone
-  | 'cursed'            // Dark dissonant pulse
   | 'recovery'          // Warm ascending tone
   | 'volume_spike'      // Quick percussive hit
   ;
@@ -37,8 +35,6 @@ const COOLDOWNS: Record<AudioCueType, number> = {
   new_ath: 10000,
   legendary_reach: 15000,
   sudden_dump: 8000,
-  zombie_rise: 10000,
-  cursed: 10000,
   recovery: 8000,
   volume_spike: 5000,
 };
@@ -125,8 +121,6 @@ export class AudioCueSystem {
         case 'new_ath':         this.synthFanfare(t); break;
         case 'legendary_reach': this.synthHornSwell(t); break;
         case 'sudden_dump':     this.synthRumble(t); break;
-        case 'zombie_rise':     this.synthEerie(t); break;
-        case 'cursed':          this.synthDarkPulse(t); break;
         case 'recovery':        this.synthWarmRise(t); break;
         case 'volume_spike':    this.synthPercHit(t); break;
       }

@@ -15,7 +15,6 @@ export type MicroEventType =
   | 'sudden_dump'       // Price drop > 20% → bells + panic
   | 'graduation'        // Token graduates → construction surge
   | 'legendary_reach'   // Hit 100M → golden flash
-  | 'zombie_rise'       // Became zombie → eerie pulse
   | 'recovery'          // Decay decreasing → warm glow
   ;
 
@@ -46,7 +45,6 @@ export class EventSystem {
   private prevATH: number = 0;
   private prevPhase: string = '';
   private prevIsLegendary: boolean = false;
-  private prevIsZombie: boolean = false;
   private initialized: boolean = false;
 
   // Visual effect meshes
@@ -66,7 +64,6 @@ export class EventSystem {
     sudden_dump: 20,
     graduation: 120,
     legendary_reach: 120,
-    zombie_rise: 60,
     recovery: 45
   };
 
@@ -105,7 +102,6 @@ export class EventSystem {
     this.prevATH = state.athMarketCap;
     this.prevPhase = state.phase;
     this.prevIsLegendary = state.isLegendary;
-    this.prevIsZombie = state.isZombie;
     this.initialized = true;
 
     // Update active events
@@ -150,11 +146,6 @@ export class EventSystem {
     // Legendary reach
     if (state.isLegendary && !this.prevIsLegendary) {
       this.triggerEvent('legendary_reach', 5, 1, now);
-    }
-
-    // Zombie rise
-    if (state.isZombie && !this.prevIsZombie) {
-      this.triggerEvent('zombie_rise', 4, 1, now);
     }
 
     // Recovery (decay decreasing meaningfully)
@@ -232,14 +223,6 @@ export class EventSystem {
         if (this.flashLight) {
           this.flashLight.color.setHex(0x44ff44);
           this.flashLight.intensity = 2 * intensity;
-        }
-        break;
-
-      case 'zombie_rise':
-        audio.play('zombie_rise');
-        if (this.flashLight) {
-          this.flashLight.color.setHex(0x44ff44);
-          this.flashLight.intensity = 2;
         }
         break;
 

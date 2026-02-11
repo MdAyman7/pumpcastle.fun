@@ -103,31 +103,17 @@ export function getTokenColors(symbol: string, decay: number): TokenColors {
  * Decayed tokens = rough stone, tarnished metal, faded cloth.
  */
 export function getMaterialWear(state: WorldState): MaterialWear {
-  const { decay, isZombie, isCursed } = state;
-
-  if (isCursed) {
-    return {
-      roughnessBoost: 0.3,
-      metalnessReduction: 0.2,
-      emissiveScale: 0.2,
-      saturationScale: 0.4
-    };
-  }
-
-  if (isZombie) {
-    return {
-      roughnessBoost: 0.25,
-      metalnessReduction: 0.15,
-      emissiveScale: 0.3,
-      saturationScale: 0.5
-    };
-  }
+  const { decay } = state;
 
   // Smooth gradient from polished (decay=0) to weathered (decay=1)
+  // Population density also affects emissive glow (low pop = dimmer)
+  const pop = state.populationDensity ?? 0.5;
+  const popDim = 0.5 + pop * 0.5; // 0.5 at ghost town, 1.0 at peak
+
   return {
-    roughnessBoost: decay * 0.2,
-    metalnessReduction: decay * 0.12,
-    emissiveScale: 1 - decay * 0.5,
+    roughnessBoost: decay * 0.25,
+    metalnessReduction: decay * 0.15,
+    emissiveScale: (1 - decay * 0.5) * popDim,
     saturationScale: 1 - decay * 0.3
   };
 }
@@ -182,4 +168,56 @@ export function getPriceMoodColor(priceMood: number): THREE.Color | null {
 export function getMoodEmissiveScale(priceMood: number): number {
   // 0.85 (bearish) → 1.0 (neutral) → 1.2 (bullish)
   return 1.0 + priceMood * 0.2;
+}
+
+/**
+ * Medieval-friendly brand colors for known exchanges.
+ * Muted/desaturated versions of actual brand colors,
+ * shifted to work under torchlight and stone textures.
+ */
+const EXCHANGE_COLORS: Record<string, number> = {
+  // Major CEX
+  'Binance':    0xb09930, // Muted gold
+  'Coinbase':   0x3060a0, // Muted blue
+  'Kraken':     0x5a3a8a, // Muted purple
+  'OKX':        0x808080, // Neutral grey
+  'Bybit':      0xc07020, // Warm amber
+  'KuCoin':     0x2a8a60, // Teal-green
+  'Gate.io':    0x2a6a9a, // Steel blue
+  'HTX':        0x2060a0, // Deep blue
+  'MEXC':       0x2a6a9a, // Steel blue
+  'Bitget':     0x3080b0, // Sky blue
+
+  // Solana DEX / Launchpads
+  'Pump':           0x2a8a6a, // Teal-green
+  'Pump AMM':       0x6a6a6a, // Neutral grey
+  'PumpSwap':       0xa05040, // Rust red
+  'Mayhem':         0xb05030, // Flame red
+  'Bags':           0x309050, // Green
+  'Bonk':           0xc08030, // Warm orange
+  'Bonkers':        0xb04530, // Deep orange-red
+  'Surge':          0x309050, // Green
+  'Soar':           0x3080b0, // Cyan-blue
+  'Moonshot':       0xb09930, // Gold
+  'Heaven':         0x8a8a8a, // Silver-grey
+  'Daos.fun':       0x3060a0, // Blue
+  'Candle':         0xc06030, // Warm orange
+  'Sugar':          0xa08a60, // Tan/beige
+  'Believe':        0x40a0b0, // Cyan
+  'Jupiter':        0x308060, // Deep green
+  'Jupiter Studio': 0x308060, // Deep green
+  'Moonit':         0x90a030, // Yellow-green
+  'Boop':           0xa050a0, // Magenta-purple
+  'LaunchLab':      0x6a40a0, // Purple
+  'Dynamic BC':     0xb06080, // Pink-coral
+  'Raydium':        0x5a40a0, // Purple
+  'Meteora':        0x7050a0, // Violet
+  'Meteora AMM':    0xc07050, // Coral-orange
+  'Meteora AMM V2': 0xc07050, // Coral-orange
+  'Orca':           0xc09030, // Warm gold
+  'Wavebreak':      0xb09040, // Gold-tan
+};
+
+export function getExchangeColor(exchangeName: string): number {
+  return EXCHANGE_COLORS[exchangeName] ?? 0x7a6a5a; // Default: neutral stone
 }

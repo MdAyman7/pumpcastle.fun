@@ -149,12 +149,15 @@ export async function addTokenToMap(address: string): Promise<void> {
 
 /** Compute importance score 0–1 from state. Drives placement ring and region size. */
 function computeImportance(state: WorldState): number {
-  const tierScores: Record<string, number> = { keep: 0.1, castle: 0.3, fortress: 0.55, citadel: 0.75 };
+  const tierScores: Record<string, number> = {
+    hut: 0.05, cottage: 0.08, tower: 0.1, keep: 0.15, manor: 0.2,
+    castle: 0.3, stronghold: 0.4, fortress: 0.55, palace: 0.65,
+    citadel: 0.75, empire: 0.85, legend: 0.95,
+  };
   let score = tierScores[state.tier] ?? 0.1;
 
   if (state.isLegendary) score += 0.2;
   if (state.phase === 'thriving') score += 0.05;
-  else if (state.phase === 'zombie' || state.phase === 'cursed') score -= 0.05;
 
   return Math.max(0, Math.min(1, score));
 }
@@ -176,8 +179,6 @@ export const mapRegions: Readable<MapRegion[]> = derived(
         athMarketCap: entry.state.athMarketCap,
         decay: entry.state.decay,
         constructionProgress: entry.state.constructionProgress,
-        isZombie: entry.state.isZombie,
-        isCursed: entry.state.isCursed,
         importance: computeImportance(entry.state),
       });
     }
