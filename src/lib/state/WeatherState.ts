@@ -10,6 +10,7 @@
  */
 
 import type { PriceWeather } from '$lib/types';
+import { WEATHER } from '$lib/state/CastleConstants';
 
 export type WeatherCondition =
   | 'clear'
@@ -30,6 +31,7 @@ export interface WeatherRenderState {
   coldFactor: number;         // 0 = normal, 1 = extreme cold
   stormFactor: number;
   fogFactor: number;
+  floodLevel: number;           // 0 = dry, 1 = fully flooded
   temperature: number;
   condition: WeatherCondition;
 }
@@ -46,6 +48,7 @@ export class WeatherState {
   private targetCold: number = 0;
   private targetStorm: number = 0;
   private targetFog: number = 0;
+  private targetFlood: number = 0;
   private targetTemp: number = 20;
   private targetCondition: WeatherCondition = 'clear';
 
@@ -59,6 +62,7 @@ export class WeatherState {
       coldFactor: 0,
       stormFactor: 0,
       fogFactor: 0,
+      floodLevel: 0,
       temperature: 20,
       condition: 'clear',
     };
@@ -74,7 +78,16 @@ export class WeatherState {
     this.targetRain = pw.precipitationType === 'rain' ? 0.65 :
       pw.precipitationType === 'storm' ? 0.85 : 0;
 
-    this.targetStorm = pw.precipitationType === 'storm' ? 0.8 + pw.volatility * 0.2 : 0;
+    // Storm factor: full storm + pre-storm buildup during heavy rain
+    if (pw.precipitationType === 'storm') {
+      this.targetStorm = 0.8 + pw.volatility * 0.2;
+    } else if (pw.precipitationType === 'rain') {
+      // Gradual buildup: linear ramp from momentum -0.4 to -0.65
+      const ramp = Math.max(0, (-pw.momentum - 0.4) / 0.25);
+      this.targetStorm = ramp * WEATHER.PRESTORM_STORM_MAX;
+    } else {
+      this.targetStorm = 0;
+    }
 
     this.targetFog = pw.precipitationType === 'fog' ? 0.5 + (1 - pw.lightColorTemperature) * 0.2 : 0;
 
@@ -130,6 +143,13 @@ export class WeatherState {
     this.renderState.coldFactor += (this.targetCold - this.renderState.coldFactor) * lerp;
     this.renderState.stormFactor += (this.targetStorm - this.renderState.stormFactor) * lerp;
     this.renderState.fogFactor += (this.targetFog - this.renderState.fogFactor) * lerp;
+
+    // Flood level derived from stormFactor
+    this.targetFlood = this.renderState.stormFactor > WEATHER.FLOOD_START_THRESHOLD
+      ? Math.min(1, (this.renderState.stormFactor - WEATHER.FLOOD_START_THRESHOLD) / 0.6)
+      : 0;
+    this.renderState.floodLevel += (this.targetFlood - this.renderState.floodLevel) * lerp;
+
     this.renderState.temperature += (this.targetTemp - this.renderState.temperature) * lerp;
     this.renderState.condition = this.targetCondition;
   }

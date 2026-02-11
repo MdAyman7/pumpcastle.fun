@@ -556,6 +556,16 @@ export class EnvironmentBuilder {
           0.78 - weather.rainIntensity * 0.15); // wetter = shinier
       }
 
+      // Storm → waterlogged, very dark and reflective ground
+      if (weather.stormFactor > 0.3) {
+        groundColor.lerp(new THREE.Color(0x2a4a2a), weather.stormFactor * 0.35);
+        this.groundMaterial.roughness = Math.min(this.groundMaterial.roughness,
+          0.50 - weather.stormFactor * 0.15); // slick wet surface
+        this.groundMaterial.metalness = weather.stormFactor * 0.08; // wet reflections
+      } else {
+        this.groundMaterial.metalness = 0;
+      }
+
       // Clear/sunny: additional brightness when no rain/cloud/fog
       const clearness = 1 - weather.rainIntensity - weather.cloudiness * 0.5 - weather.fogFactor;
       if (clearness > 0.5 && daylightFactor > 0.5) {

@@ -451,6 +451,13 @@ export const WEATHER = {
 
   /** Light temperature sigmoid exponent */
   LIGHT_TEMP_POWER: 0.8,
+
+  /** Pre-storm buildup: heavy rain gets partial stormFactor (0–0.35) */
+  PRESTORM_STORM_MAX: 0.35,
+  /** Flood ramp: stormFactor threshold to start rising water */
+  FLOOD_START_THRESHOLD: 0.4,
+  /** Max flood water opacity */
+  FLOOD_MAX_OPACITY: 0.55,
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
