@@ -76,7 +76,7 @@ export async function loadToken(address: string): Promise<void> {
 /**
  * Start polling for token updates
  */
-export function startPolling(address: string, intervalMs: number = 15000): void {
+export function startPolling(address: string, intervalMs: number = 60000): void {
   stopPolling();
 
   pollingInterval = setInterval(async () => {

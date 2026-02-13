@@ -15,29 +15,34 @@
     mapRegions,
     mapLoading,
     loadAllTokens,
-    startMapPolling,
-    stopMapPolling,
     addTokenToMap
   } from '$lib/stores/mapStore';
   import WorldMap from '$lib/components/WorldMap.svelte';
+  import { IconSearch } from '@tabler/icons-svelte';
   import type { WorldState } from '$lib/types';
   import type { TimeInfo } from '$lib/state/TimeState';
   import { getAudioCueSystem } from '$lib/audio/AudioCueSystem';
   import { VisualCueFallback, VISUAL_CUE_STYLES } from '$lib/audio/VisualCueFallback';
   import { getMusicManager } from '$lib/audio/MusicManager';
 
+  /** Route data: address from URL (null = map view) */
+  export let data: { address: string | null };
+
   let containerEl: HTMLElement;
   let renderer: WorldRenderer3D | null = null;
   let inputAddress = '';
   let drawerOpen = false;
   let searchFocused = false;
+  let mapSearchOpen = false;
+  let mapSearchInput: HTMLInputElement;
   let timeInfo: TimeInfo | null = null;
   let showTimeIndicator = true;
   let timeInterval: ReturnType<typeof setInterval> | null = null;
   let qualityLevel: string = 'medium';
 
   // View mode: 'map' shows the kingdom overview, 'castle' shows the 3D scene
-  let viewMode: 'map' | 'castle' = 'map';
+  // If we arrived via /:address URL, start directly in castle mode
+  let viewMode: 'map' | 'castle' = data.address ? 'castle' : 'map';
   let rendererMounted = false;
 
   // Transition state
@@ -143,6 +148,8 @@
       // In castle view, load directly
       await addTokenToMap(addr);
       await loadToken(addr);
+      // Update URL to reflect the new token
+      history.replaceState({}, '', `/${addr}`);
       if (renderer) renderer.resume();
     }
   }
@@ -154,6 +161,7 @@
       return;
     }
     await loadToken(address);
+    history.replaceState({}, '', `/${address}`);
     if (renderer) {
       renderer.resume();
     }
@@ -176,9 +184,23 @@
     }
   }
 
+  function openMapSearch() {
+    mapSearchOpen = true;
+    // Focus the input after DOM updates
+    requestAnimationFrame(() => {
+      mapSearchInput?.focus();
+    });
+  }
+
+  function closeMapSearch() {
+    mapSearchOpen = false;
+    searchFocused = false;
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       if (transitioning) return;
+      if (mapSearchOpen) { closeMapSearch(); return; }
       if (drawerOpen) drawerOpen = false;
       else if (searchFocused) searchFocused = false;
       else if (viewMode === 'castle') goToMap();
@@ -227,6 +249,9 @@
       new Promise(r => setTimeout(r, 900)),
     ]);
 
+    // Update URL to /:address
+    history.pushState({}, '', `/${address}`);
+
     // Phase 2: Map is now gone — show the loader
     loaderActive = true;
 
@@ -256,7 +281,7 @@
   }
 
   /** Return to the world map with reverse zoom-out transition */
-  async function goToMap() {
+  async function goToMap(pushHistory = true) {
     if (transitioning) return;
     transitioning = true;
     drawerOpen = false;
@@ -279,6 +304,9 @@
     mapZoomTargetId = $tokenAddress;
     mapFading = false;
     viewMode = 'map';
+
+    // Update URL back to root (skip if triggered by popstate)
+    if (pushHistory) history.pushState({}, '', '/');
 
     // After one frame to apply the zoomed transform, remove it to trigger zoom-out
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -345,34 +373,59 @@
     }
   }
 
+  /** Handle browser back/forward navigation */
+  function handlePopState() {
+    const path = window.location.pathname;
+    const urlAddress = path === '/' ? null : path.slice(1);
+
+    if (!urlAddress && viewMode === 'castle') {
+      // Back to map (don't push history again)
+      goToMap(false);
+    } else if (urlAddress && urlAddress.length >= 32 && viewMode === 'map') {
+      // Forward to a castle address
+      handleRegionClick(urlAddress);
+    } else if (urlAddress && urlAddress.length >= 32 && viewMode === 'castle') {
+      // Navigating between castles via history
+      loadToken(urlAddress).then(() => {
+        addTokenToMap(urlAddress);
+      });
+    }
+  }
+
   onMount(() => {
     window.addEventListener('resize', handleResize);
     window.addEventListener('keydown', handleKeydown);
+    window.addEventListener('popstate', handlePopState);
 
     // Attach visual cue overlay container
     if (visualCueContainer) {
       visualCues.attach(visualCueContainer);
     }
 
-    // Load all tokens for the map view
-    loadAllTokens().then(() => {
-      startMapPolling();
-    });
+    // Load all tokens for the map view (one-time fetch, no polling)
+    loadAllTokens();
 
-    // Mount the 3D renderer (it starts paused on map view)
+    // Mount the 3D renderer
     mountRenderer();
+
+    // If we arrived via /:address URL, load that token directly into castle view
+    if (data.address) {
+      loadToken(data.address).then(() => {
+        addTokenToMap(data.address!);
+      });
+    }
   });
 
   onDestroy(() => {
     if (browser) {
       renderer?.destroy();
       resetStore();
-      stopMapPolling();
       audioCues.dispose();
       visualCues.dispose();
       music.dispose();
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('keydown', handleKeydown);
+      window.removeEventListener('popstate', handlePopState);
       if (timeInterval) clearInterval(timeInterval);
     }
   });
@@ -455,7 +508,7 @@
 <div class="top-bar" class:map-mode={viewMode === 'map' && !transitioning}>
   <!-- Back button in castle mode -->
   {#if viewMode === 'castle'}
-    <button class="back-btn" on:click={goToMap} title="Back to World Map" disabled={transitioning}>
+    <button class="back-btn" on:click={() => goToMap()} title="Back to World Map" disabled={transitioning}>
       <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
         <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
       </svg>
@@ -463,43 +516,43 @@
   {/if}
 
   <div class="logo">
-    <span class="logo-icon">🏰</span>
-    <span class="logo-text">Pumpcastle</span>
+    <span class="logo-text">PUMPCASTLE</span>
   </div>
 
-  <div class="search-area" class:expanded={searchFocused}>
-    <form on:submit|preventDefault={handleSubmit} class="search-form">
-      <svg class="search-icon" viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
-        <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/>
-      </svg>
-      <input
-        type="text"
-        bind:value={inputAddress}
-        placeholder="Paste token address..."
-        disabled={$isLoading}
-        on:focus={() => searchFocused = true}
-        on:blur={() => setTimeout(() => searchFocused = false, 200)}
-      />
-      {#if $isLoading}
-        <div class="spinner"></div>
+  <!-- Castle mode: inline search -->
+  {#if viewMode === 'castle'}
+    <div class="search-area" class:expanded={searchFocused}>
+      <form on:submit|preventDefault={handleSubmit} class="search-form">
+        <IconSearch size={16} class="search-icon-tabler" />
+        <input
+          type="text"
+          bind:value={inputAddress}
+          placeholder="Paste token address..."
+          disabled={$isLoading}
+          on:focus={() => searchFocused = true}
+          on:blur={() => setTimeout(() => searchFocused = false, 200)}
+        />
+        {#if $isLoading}
+          <div class="spinner"></div>
+        {/if}
+      </form>
+
+      {#if searchFocused}
+        <div class="presets-dropdown">
+          {#each presets as preset}
+            <button
+              class="preset-item"
+              class:active={$tokenAddress === preset.address}
+              on:click={() => handlePreset(preset.address)}
+            >
+              <span class="preset-icon">{preset.icon}</span>
+              <span>{preset.label}</span>
+            </button>
+          {/each}
+        </div>
       {/if}
-    </form>
-
-    {#if searchFocused}
-      <div class="presets-dropdown">
-        {#each presets as preset}
-          <button
-            class="preset-item"
-            class:active={$tokenAddress === preset.address}
-            on:click={() => handlePreset(preset.address)}
-          >
-            <span class="preset-icon">{preset.icon}</span>
-            <span>{preset.label}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-  </div>
+    </div>
+  {/if}
 
   <!-- World HUD: time display (castle mode only) -->
   {#if viewMode === 'castle' && timeInfo}
@@ -517,22 +570,54 @@
   {/if}
 </div>
 
-<!-- Preset buttons strip (top-right, castle view only) -->
-{#if viewMode === 'castle'}
-<div class="presets-strip">
-  {#each presets as preset}
-    <button
-      class="preset-chip"
-      class:active={$tokenAddress === preset.address}
-      on:click={() => handlePreset(preset.address)}
-      title={preset.label}
-    >
-      <span class="chip-icon">{preset.icon}</span>
-      <span class="chip-label">{preset.label}</span>
-    </button>
-  {/each}
-</div>
+<!-- Map mode: floating search icon that expands into full search -->
+{#if viewMode === 'map' && !transitioning}
+  <!-- svelte-ignore a11y-click-events-have-key-events -->
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  {#if mapSearchOpen}
+    <div class="map-search-backdrop" on:click={closeMapSearch}></div>
+  {/if}
+  <div class="map-search-container" class:open={mapSearchOpen}>
+    {#if !mapSearchOpen}
+      <button class="map-search-trigger" on:click={openMapSearch} title="Search token">
+        <IconSearch size={20} />
+      </button>
+    {:else}
+      <form on:submit|preventDefault={() => { handleSubmit(); closeMapSearch(); }} class="map-search-form">
+        <span class="map-search-icon-inner">
+          <IconSearch size={16} />
+        </span>
+        <input
+          type="text"
+          bind:this={mapSearchInput}
+          bind:value={inputAddress}
+          placeholder="Paste token address..."
+          disabled={$isLoading}
+          on:blur={() => setTimeout(() => { if (!inputAddress.trim()) closeMapSearch(); }, 250)}
+        />
+        {#if $isLoading}
+          <div class="spinner"></div>
+        {/if}
+      </form>
+
+      {#if inputAddress.trim() === '' && presets.length > 0}
+        <div class="map-presets-dropdown">
+          {#each presets as preset}
+            <button
+              class="preset-item"
+              class:active={$tokenAddress === preset.address}
+              on:click={() => { handlePreset(preset.address); closeMapSearch(); }}
+            >
+              <span class="preset-icon">{preset.icon}</span>
+              <span>{preset.label}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    {/if}
+  </div>
 {/if}
+
 
 <!-- Token identity badge (castle view only) -->
 {#if viewMode === 'castle' && $tokenData && $worldState}
@@ -829,12 +914,29 @@
     height: 100% !important;
   }
 
-  /* ---- Glass base ---- */
+  /* ── Liquid glass base ────────────────────────────────────────
+   * Higher blur, more transparent, inner glow along top edge,
+   * soft diffused shadows, subtle gradient tint for depth.
+   */
   .top-bar, .status-strip, .stats-bar, .drawer, .toast-error, .presets-dropdown {
-    backdrop-filter: blur(16px) saturate(1.4);
-    -webkit-backdrop-filter: blur(16px) saturate(1.4);
-    background: rgba(15, 15, 20, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(28px) saturate(1.6);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0.03) 40%,
+      rgba(0, 0, 0, 0.04) 100%
+    );
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-top-color: rgba(255, 255, 255, 0.20);
+    border-left-color: rgba(255, 255, 255, 0.16);
+    border-bottom-color: rgba(255, 255, 255, 0.05);
+    border-right-color: rgba(255, 255, 255, 0.06);
+    box-shadow:
+      0 8px 40px rgba(0, 0, 0, 0.20),
+      0 2px 12px rgba(0, 0, 0, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      inset 0 0 24px rgba(255, 255, 255, 0.02);
   }
 
   /* ---- Top bar ---- */
@@ -846,48 +948,37 @@
     z-index: 20;
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 8px 12px;
-    border-radius: 14px;
+    gap: 10px;
+    padding: 8px 12px 8px 14px;
+    border-radius: 18px;
     transition: background 0.4s, border-color 0.4s, backdrop-filter 0.4s;
   }
 
-  /* Map mode: strip glass chrome, go fully transparent */
+  /* Map mode: hide the top bar entirely (search is now a floating element) */
   .top-bar.map-mode {
     background: transparent;
     border-color: transparent;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+    box-shadow: none;
     padding: 10px 16px;
-  }
-  .top-bar.map-mode .logo {
-    opacity: 0;
     pointer-events: none;
+    opacity: 0;
     transition: opacity 0.3s ease;
-  }
-  .top-bar.map-mode .search-form {
-    background: rgba(10, 10, 14, 0.3);
-    border-color: rgba(255, 255, 255, 0.04);
-  }
-  .top-bar.map-mode .search-form:focus-within {
-    background: rgba(15, 15, 20, 0.7);
-    border-color: rgba(255, 255, 255, 0.15);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
   }
 
   .logo {
     display: flex;
     align-items: center;
-    gap: 6px;
     flex-shrink: 0;
   }
-  .logo-icon { font-size: 1.2rem; }
   .logo-text {
+    font-family: 'Cinzel', 'Georgia', serif;
     font-weight: 700;
-    font-size: 0.95rem;
-    letter-spacing: -0.02em;
-    color: #fafafa;
+    font-size: 0.7rem;
+    letter-spacing: 0.18em;
+    color: rgba(255, 255, 255, 0.30);
+    text-transform: uppercase;
   }
 
   .search-area {
@@ -902,17 +993,20 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-top-color: rgba(255, 255, 255, 0.16);
+    border-radius: 12px;
     padding: 6px 12px;
-    transition: border-color 0.2s, background 0.2s;
+    transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
   .search-form:focus-within {
-    border-color: rgba(255, 255, 255, 0.2);
-    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.22);
+    border-top-color: rgba(255, 255, 255, 0.30);
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), 0 0 16px rgba(255, 255, 255, 0.03);
   }
-  .search-icon { color: #71717a; flex-shrink: 0; }
   .search-form input {
     flex: 1;
     background: none;
@@ -923,7 +1017,168 @@
     font-family: inherit;
     min-width: 0;
   }
-  .search-form input::placeholder { color: #52525b; }
+  .search-form input::placeholder { color: #78788a; }
+  :global(.search-icon-tabler) { color: #9494a3; flex-shrink: 0; }
+
+  /* ---- Map mode floating search ---- */
+  .map-search-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 19;
+  }
+
+  .map-search-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 20;
+  }
+
+  .map-search-trigger {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-top-color: rgba(255, 255, 255, 0.22);
+    border-left-color: rgba(255, 255, 255, 0.16);
+    border-bottom-color: rgba(255, 255, 255, 0.05);
+    border-right-color: rgba(255, 255, 255, 0.06);
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.10) 0%,
+      rgba(255, 255, 255, 0.04) 40%,
+      rgba(0, 0, 0, 0.06) 100%
+    );
+    backdrop-filter: blur(28px) saturate(1.6);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, 0.25),
+      0 2px 8px rgba(0, 0, 0, 0.15),
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      inset 0 0 16px rgba(255, 255, 255, 0.03);
+    color: #c0c0cc;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, color 0.15s ease, border-color 0.15s ease;
+    animation: searchTriggerIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+  .map-search-trigger:hover {
+    transform: scale(1.08);
+    color: #fafafa;
+    border-color: rgba(255, 255, 255, 0.22);
+    box-shadow:
+      0 10px 40px rgba(0, 0, 0, 0.30),
+      0 2px 12px rgba(0, 0, 0, 0.20),
+      inset 0 1px 0 rgba(255, 255, 255, 0.18),
+      0 0 20px rgba(255, 255, 255, 0.04);
+  }
+  .map-search-trigger:active {
+    transform: scale(0.95);
+  }
+
+  @keyframes searchTriggerIn {
+    from { opacity: 0; transform: scale(0.5); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .map-search-container.open {
+    right: 16px;
+    left: 16px;
+    max-width: 480px;
+    margin-left: auto;
+  }
+
+  .map-search-form {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-top-color: rgba(255, 255, 255, 0.24);
+    border-left-color: rgba(255, 255, 255, 0.18);
+    border-bottom-color: rgba(255, 255, 255, 0.06);
+    border-right-color: rgba(255, 255, 255, 0.08);
+    background: linear-gradient(
+      160deg,
+      rgba(15, 15, 20, 0.80) 0%,
+      rgba(10, 10, 14, 0.85) 40%,
+      rgba(5, 5, 8, 0.90) 100%
+    );
+    backdrop-filter: blur(32px) saturate(1.6);
+    -webkit-backdrop-filter: blur(32px) saturate(1.6);
+    box-shadow:
+      0 12px 48px rgba(0, 0, 0, 0.35),
+      0 4px 16px rgba(0, 0, 0, 0.20),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      inset 0 0 20px rgba(255, 255, 255, 0.02);
+    animation: searchFormExpand 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+
+  @keyframes searchFormExpand {
+    from {
+      opacity: 0;
+      transform: scaleX(0.3) translateX(40%);
+      transform-origin: right center;
+    }
+    to {
+      opacity: 1;
+      transform: scaleX(1) translateX(0);
+      transform-origin: right center;
+    }
+  }
+
+  .map-search-icon-inner {
+    color: #9494a3;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .map-search-form input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: #fafafa;
+    font-size: 0.9rem;
+    font-family: inherit;
+    min-width: 0;
+  }
+  .map-search-form input::placeholder {
+    color: #78788a;
+  }
+
+  .map-presets-dropdown {
+    margin-top: 6px;
+    padding: 4px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-top-color: rgba(255, 255, 255, 0.18);
+    background: linear-gradient(
+      160deg,
+      rgba(15, 15, 20, 0.85) 0%,
+      rgba(10, 10, 14, 0.90) 100%
+    );
+    backdrop-filter: blur(28px) saturate(1.6);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    box-shadow:
+      0 8px 40px rgba(0, 0, 0, 0.30),
+      0 2px 12px rgba(0, 0, 0, 0.15),
+      inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+    animation: presetsSlideDown 0.2s ease forwards;
+  }
+
+  @keyframes presetsSlideDown {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
 
   .spinner {
     width: 16px;
@@ -940,7 +1195,7 @@
     top: calc(100% + 6px);
     left: 0;
     right: 0;
-    border-radius: 12px;
+    border-radius: 16px;
     padding: 4px;
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -954,7 +1209,7 @@
     padding: 8px 10px;
     border: none;
     background: transparent;
-    color: #a1a1aa;
+    color: #c0c0cc;
     font-size: 0.82rem;
     font-family: inherit;
     border-radius: 8px;
@@ -971,48 +1226,6 @@
   }
   .preset-icon { font-size: 1rem; }
 
-  /* ---- Presets strip (top-right) ---- */
-  .presets-strip {
-    position: fixed;
-    top: 72px;
-    right: 16px;
-    z-index: 15;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    justify-content: flex-end;
-    max-width: 360px;
-  }
-  .preset-chip {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 5px 10px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
-    backdrop-filter: blur(12px) saturate(1.3);
-    -webkit-backdrop-filter: blur(12px) saturate(1.3);
-    background: rgba(15, 15, 20, 0.45);
-    color: #a1a1aa;
-    font-size: 0.72rem;
-    font-family: inherit;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
-  }
-  .preset-chip:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fafafa;
-    border-color: rgba(255, 255, 255, 0.15);
-  }
-  .preset-chip.active {
-    background: rgba(255, 255, 255, 0.12);
-    color: #fafafa;
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-  .chip-icon { font-size: 0.85rem; }
-  .chip-label { letter-spacing: 0.01em; }
-
   /* ---- Bottom-left status ---- */
   .status-strip {
     position: fixed;
@@ -1022,7 +1235,7 @@
     display: flex;
     gap: 6px;
     padding: 6px 8px;
-    border-radius: 12px;
+    border-radius: 14px;
   }
   .phase-pill, .tier-pill, .legendary-pill {
     padding: 4px 12px;
@@ -1037,7 +1250,7 @@
   }
   .tier-pill {
     background: rgba(255, 255, 255, 0.08);
-    color: #d4d4d8;
+    color: #e8e8ee;
   }
   .legendary-pill {
     background: linear-gradient(135deg, rgba(234, 179, 8, 0.3), rgba(249, 115, 22, 0.3));
@@ -1055,11 +1268,23 @@
     align-items: center;
     gap: 10px;
     padding: 8px 14px;
-    border-radius: 12px;
-    backdrop-filter: blur(16px) saturate(1.4);
-    -webkit-backdrop-filter: blur(16px) saturate(1.4);
-    background: rgba(15, 15, 20, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    backdrop-filter: blur(28px) saturate(1.6);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0.03) 40%,
+      rgba(0, 0, 0, 0.04) 100%
+    );
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-top-color: rgba(255, 255, 255, 0.20);
+    border-left-color: rgba(255, 255, 255, 0.16);
+    border-bottom-color: rgba(255, 255, 255, 0.05);
+    box-shadow:
+      0 8px 40px rgba(0, 0, 0, 0.20),
+      0 2px 12px rgba(0, 0, 0, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12);
   }
   .token-identity-img {
     width: 32px;
@@ -1079,7 +1304,7 @@
     font-family: 'Cinzel', serif;
     font-size: 0.9rem;
     font-weight: 600;
-    color: #a1a1aa;
+    color: #c0c0cc;
   }
   .token-identity-text {
     display: flex;
@@ -1095,7 +1320,7 @@
   }
   .token-identity-symbol {
     font-size: 0.68rem;
-    color: #71717a;
+    color: #9494a3;
     letter-spacing: 0.03em;
   }
 
@@ -1189,7 +1414,7 @@
     align-items: center;
     gap: 12px;
     padding: 8px 10px 8px 16px;
-    border-radius: 12px;
+    border-radius: 16px;
   }
   .stat {
     display: flex;
@@ -1205,7 +1430,7 @@
   }
   .stat-lbl {
     font-size: 0.65rem;
-    color: #71717a;
+    color: #9494a3;
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -1248,22 +1473,33 @@
   }
 
   .drawer-toggle {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #a1a1aa;
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0.03) 100%
+    );
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-top-color: rgba(255, 255, 255, 0.18);
+    color: #c0c0cc;
     width: 32px;
     height: 32px;
-    border-radius: 8px;
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: background 0.15s, color 0.15s;
+    transition: background 0.15s, color 0.15s, box-shadow 0.15s;
     padding: 0;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   }
   .drawer-toggle:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.14) 0%,
+      rgba(255, 255, 255, 0.05) 100%
+    );
     color: #fafafa;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.15);
   }
 
   /* ---- Error toast ---- */
@@ -1274,10 +1510,11 @@
     transform: translateX(-50%);
     z-index: 30;
     padding: 10px 20px;
-    border-radius: 10px;
+    border-radius: 14px;
     color: #fca5a5;
     font-size: 0.85rem;
     border-color: rgba(239, 68, 68, 0.2);
+    border-top-color: rgba(239, 68, 68, 0.3);
   }
 
   /* ---- Drawer ---- */
@@ -1296,7 +1533,7 @@
     max-width: 90vw;
     z-index: 50;
     border-radius: 0;
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    border-left: 1px solid rgba(255, 255, 255, 0.14);
     border-top: none;
     border-bottom: none;
     border-right: none;
@@ -1325,7 +1562,7 @@
   .drawer-close {
     background: none;
     border: none;
-    color: #71717a;
+    color: #9494a3;
     cursor: pointer;
     padding: 4px;
     border-radius: 6px;
@@ -1360,7 +1597,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: #52525b;
+    color: #78788a;
   }
   .token-header h3 {
     margin: 0;
@@ -1370,7 +1607,7 @@
   }
   .token-symbol {
     font-size: 0.8rem;
-    color: #71717a;
+    color: #9494a3;
   }
 
   .detail-row {
@@ -1378,11 +1615,11 @@
     align-items: center;
     justify-content: space-between;
     font-size: 0.82rem;
-    color: #a1a1aa;
+    color: #c0c0cc;
   }
   .detail-val {
     font-weight: 600;
-    color: #d4d4d8;
+    color: #e8e8ee;
     font-variant-numeric: tabular-nums;
   }
   .detail-val.accent { color: #fbbf24; }
@@ -1398,33 +1635,49 @@
     padding: 6px 0;
     font-size: 0.75rem;
     font-weight: 500;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    border-radius: 6px;
-    color: #a1a1aa;
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.06) 0%,
+      rgba(255, 255, 255, 0.02) 100%
+    );
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-top-color: rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    color: #c0c0cc;
     cursor: pointer;
     transition: all 0.15s;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
   .quality-btn:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.12) 0%,
+      rgba(255, 255, 255, 0.04) 100%
+    );
     color: #e4e4e7;
   }
   .quality-btn.active {
-    background: rgba(34, 197, 94, 0.15);
+    background: linear-gradient(
+      160deg,
+      rgba(34, 197, 94, 0.18) 0%,
+      rgba(34, 197, 94, 0.06) 100%
+    );
     border-color: rgba(34, 197, 94, 0.4);
+    border-top-color: rgba(34, 197, 94, 0.5);
     color: #22c55e;
+    box-shadow: inset 0 1px 0 rgba(34, 197, 94, 0.15);
   }
   .quality-hint {
     margin: 6px 0 0;
     font-size: 0.68rem;
-    color: #52525b;
+    color: #78788a;
   }
 
 
   .drawer-empty {
     padding: 40px 20px;
     text-align: center;
-    color: #52525b;
+    color: #78788a;
   }
 
   /* ---- Hidden viewport (when map is active) ---- */
@@ -1604,19 +1857,30 @@
     justify-content: center;
     width: 32px;
     height: 32px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.06);
-    color: #a1a1aa;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-top-color: rgba(255, 255, 255, 0.18);
+    border-radius: 10px;
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0.03) 100%
+    );
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    color: #c0c0cc;
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s;
     padding: 0;
   }
   .back-btn:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.14) 0%,
+      rgba(255, 255, 255, 0.05) 100%
+    );
     color: #fafafa;
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.22);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.15);
   }
 
   /* ---- Map loading ---- */
@@ -1630,12 +1894,21 @@
     align-items: center;
     gap: 10px;
     padding: 10px 20px;
-    border-radius: 12px;
-    backdrop-filter: blur(16px) saturate(1.4);
-    -webkit-backdrop-filter: blur(16px) saturate(1.4);
-    background: rgba(15, 15, 20, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #a1a1aa;
+    border-radius: 16px;
+    backdrop-filter: blur(28px) saturate(1.6);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0.02) 40%,
+      rgba(0, 0, 0, 0.06) 100%
+    );
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-top-color: rgba(255, 255, 255, 0.20);
+    box-shadow:
+      0 8px 40px rgba(0, 0, 0, 0.20),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    color: #c0c0cc;
     font-size: 0.82rem;
   }
 
@@ -1647,36 +1920,43 @@
       right: 8px;
       padding: 6px 10px;
     }
-    .logo-text { display: none; }
+    /* Castle view: stack status + stats vertically to avoid overlap */
     .status-strip {
-      bottom: 8px;
+      bottom: 44px;
       left: 8px;
+      right: 8px;
+      justify-content: center;
+      flex-wrap: wrap;
+      padding: 4px 6px;
+    }
+    .phase-pill, .tier-pill, .legendary-pill {
+      font-size: 0.68rem;
+      padding: 3px 8px;
     }
     .stats-bar {
       bottom: 8px;
+      left: 8px;
       right: 8px;
-      gap: 8px;
-      padding: 6px 8px 6px 12px;
+      gap: 6px;
+      padding: 6px 8px;
+      justify-content: center;
+      border-radius: 14px;
     }
-    .stat-val { font-size: 0.78rem; }
+    .stat-val { font-size: 0.75rem; }
+    .stat-lbl { font-size: 0.6rem; }
+    .drawer-toggle { width: 28px; height: 28px; }
     .drawer { width: 100vw; max-width: 100vw; }
     .presets-dropdown {
       grid-template-columns: 1fr 1fr;
     }
-    .presets-strip {
-      top: 60px;
-      right: 8px;
-      max-width: calc(100vw - 16px);
-    }
-    .chip-label { display: none; }
-    .preset-chip { padding: 5px 8px; }
-
     /* Token identity: compact on mobile */
     .token-identity {
-      top: 56px;
+      top: 52px;
       left: 8px;
+      right: 8px;
       padding: 6px 10px;
       gap: 8px;
+      border-radius: 12px;
     }
     .token-identity-img,
     .token-identity-placeholder {
@@ -1697,8 +1977,18 @@
     .hud-period { display: none; }
     /* Hide the separator after hidden period */
     .hud-period + .hud-sep { display: none; }
-    .sound-toggle { bottom: 8px; left: 8px; }
-    .music-toggle { bottom: 8px; left: 42px; }
+    .sound-toggle { bottom: 56px; left: 8px; }
+    .music-toggle { bottom: 56px; left: 42px; }
+
+    /* Map search: mobile adjustments */
+    .map-search-container { top: 12px; right: 12px; }
+    .map-search-container.open { right: 8px; left: 8px; max-width: none; }
+    .map-search-trigger { width: 40px; height: 40px; }
+    .map-presets-dropdown { grid-template-columns: 1fr 1fr; }
+
+    /* Castle loader: compact on mobile */
+    .castle-loader-name { font-size: 0.95rem; }
+    .castle-loader-symbol { font-size: 0.68rem; }
   }
 
   /* ---- Sound toggle ---- */
@@ -1712,20 +2002,31 @@
     justify-content: center;
     width: 28px;
     height: 28px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-top-color: rgba(255, 255, 255, 0.18);
     border-radius: 50%;
-    background: rgba(15, 15, 20, 0.6);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    color: #71717a;
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.07) 0%,
+      rgba(0, 0, 0, 0.04) 100%
+    );
+    backdrop-filter: blur(24px) saturate(1.5);
+    -webkit-backdrop-filter: blur(24px) saturate(1.5);
+    box-shadow:
+      0 4px 16px rgba(0, 0, 0, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    color: #9494a3;
     cursor: pointer;
     transition: all 0.15s;
     opacity: 0.6;
   }
   .sound-toggle:hover {
     opacity: 1;
-    color: #a1a1aa;
-    border-color: rgba(255, 255, 255, 0.15);
+    color: #c0c0cc;
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow:
+      0 6px 20px rgba(0, 0, 0, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.14);
   }
 
   /* ---- Music toggle ---- */
@@ -1739,20 +2040,31 @@
     justify-content: center;
     width: 28px;
     height: 28px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-top-color: rgba(255, 255, 255, 0.18);
     border-radius: 50%;
-    background: rgba(15, 15, 20, 0.6);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    color: #71717a;
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.07) 0%,
+      rgba(0, 0, 0, 0.04) 100%
+    );
+    backdrop-filter: blur(24px) saturate(1.5);
+    -webkit-backdrop-filter: blur(24px) saturate(1.5);
+    box-shadow:
+      0 4px 16px rgba(0, 0, 0, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    color: #9494a3;
     cursor: pointer;
     transition: all 0.15s;
     opacity: 0.6;
   }
   .music-toggle:hover {
     opacity: 1;
-    color: #a1a1aa;
-    border-color: rgba(255, 255, 255, 0.15);
+    color: #c0c0cc;
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow:
+      0 6px 20px rgba(0, 0, 0, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.14);
   }
 
   /* ---- Volume slider in drawer ---- */
@@ -1764,7 +2076,7 @@
   }
   .volume-label {
     font-size: 0.7rem;
-    color: #71717a;
+    color: #9494a3;
     min-width: 42px;
   }
   .volume-slider input[type="range"] {

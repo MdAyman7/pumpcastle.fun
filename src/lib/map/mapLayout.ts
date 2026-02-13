@@ -3,17 +3,13 @@
  *
  * Spatial layout engine for the kingdom world map.
  *
- * Supports two modes:
- *   1. Static layouts for the 8 preset tokens (hand-tuned SVG paths)
- *   2. Dynamic layout engine for arbitrary numbers of regions
+ * Structured geographic grid:
+ *   3 columns (left realm, central kingdom, right realm)
+ *   3 rows (northern mountains, central political, southern coast/trade)
  *
- * The dynamic engine:
- *   - Sorts regions by importance (highest → center)
- *   - Places them in concentric rings (inner = important, outer = minor)
- *   - Scales each region's radius by importance
- *   - Generates organic polygon SVG paths procedurally
- *   - Generates road paths connecting each region to a hub
- *   - All fully deterministic from region data (hash-seeded, no randomness)
+ * Static layouts for known demo tokens use hand-tuned positions.
+ * Dynamic engine places regions in a structured grid with terrain-aware
+ * borders, mountain ridges, rivers, forests, and coastline.
  *
  * SVG viewBox: 0 0 1000 700
  */
@@ -33,63 +29,90 @@ export interface RegionLayout {
 
 // ── Canvas constants ──
 const CX = 500;        // Kingdom center X
-const CY = 340;        // Kingdom center Y (slightly above center for hilltop feel)
+const CY = 320;        // Kingdom center Y
 const MAP_W = 1000;
 const MAP_H = 700;
 const PADDING = 80;    // Min distance from SVG edges
 const MIN_RADIUS = 30; // Smallest region
 const MAX_RADIUS = 70; // Largest region (legendary)
 
+// ── Geographic grid positions (3×3) ──
+// Northern row: y ~ 120–180 (mountains zone)
+// Central row: y ~ 280–380 (political heartland)
+// Southern row: y ~ 480–560 (coastal/trade zone)
+
+/** Grid slot positions for the 3×3 + extras layout */
+const GRID_SLOTS: Array<{ cx: number; cy: number; zone: 'north' | 'central' | 'south' }> = [
+  // Central kingdom — heart of the map (slightly dominant)
+  { cx: 500, cy: 320, zone: 'central' },
+  // Northern row — mountain realms
+  { cx: 280, cy: 150, zone: 'north' },   // NW
+  { cx: 500, cy: 120, zone: 'north' },   // N center (hilltop)
+  { cx: 720, cy: 150, zone: 'north' },   // NE
+  // Central row — flanking kingdoms
+  { cx: 250, cy: 340, zone: 'central' }, // W
+  { cx: 750, cy: 340, zone: 'central' }, // E
+  // Southern row — coastal/trade zones
+  { cx: 280, cy: 520, zone: 'south' },   // SW
+  { cx: 720, cy: 520, zone: 'south' },   // SE
+  // Overflow slots for 9+ regions
+  { cx: 500, cy: 540, zone: 'south' },   // S center
+  { cx: 140, cy: 240, zone: 'north' },   // far NW
+  { cx: 860, cy: 240, zone: 'north' },   // far NE
+  { cx: 140, cy: 460, zone: 'south' },   // far SW
+  { cx: 860, cy: 460, zone: 'south' },   // far SE
+];
+
 // ── Static presets (hand-tuned, kept for the 8 known demo tokens) ──
 
 const STATIC_LAYOUTS: Record<string, RegionLayout> = {
-  // Legendary — top center hilltop, largest region
+  // Legendary — north-center hilltop, slightly above kingdom center
   'legend123456789012345678901234567890123456': {
-    cx: 500, cy: 115,
-    path: 'M435,70 L465,58 Q500,50 535,58 L565,70 L580,95 L575,130 L560,155 L535,165 Q500,170 465,165 L440,155 L425,130 L420,95 Z',
-    roadPath: 'M500,165 L500,230',
+    cx: 500, cy: 120,
+    path: 'M440,78 L468,68 Q500,60 532,68 L560,78 L574,100 L572,130 L558,152 L535,162 Q500,168 465,162 L442,152 L428,130 L430,100 Z',
+    roadPath: 'M500,168 Q500,220 500,280',
   },
-  // Thriving — upper-left district
+  // Thriving — upper-left, northwest realm
   'thriving1234567890123456789012345678901234': {
-    cx: 320, cy: 225,
-    path: 'M255,195 L290,185 L330,190 L365,200 L380,225 L375,255 L355,275 L320,280 L280,272 L258,250 L250,225 Z',
-    roadPath: 'M365,225 L435,225 Q460,230 470,250',
+    cx: 280, cy: 150,
+    path: 'M218,115 L252,105 L298,110 L335,125 L345,150 L338,178 L315,195 L280,198 L242,190 L220,170 L215,145 Z',
+    roadPath: 'M335,155 Q400,220 460,290',
   },
-  // Graduated — upper-right district
+  // Graduated — upper-right, northeast realm
   'justgrad12345678901234567890123456789012345': {
-    cx: 680, cy: 225,
-    path: 'M625,195 L660,188 L700,192 L735,205 L745,230 L738,258 L718,275 L685,280 L648,270 L630,250 L622,225 Z',
-    roadPath: 'M630,230 L560,240 Q535,245 530,260',
+    cx: 720, cy: 150,
+    path: 'M660,115 L695,108 L738,112 L775,128 L782,155 L775,182 L752,198 L718,200 L682,192 L662,172 L658,145 Z',
+    roadPath: 'M665,158 Q600,220 540,290',
   },
-  // Construction — center, heart of the kingdom
+  // Construction — center, heart of the kingdom (dominant)
   'pregrad123456789012345678901234567890123456': {
-    cx: 500, cy: 340,
-    path: 'M438,295 L470,288 Q500,285 530,288 L562,295 L578,320 L580,350 L570,378 L545,392 Q500,398 455,392 L430,378 L420,350 L422,320 Z',
+    cx: 500, cy: 320,
+    path: 'M432,270 L468,260 Q500,255 532,260 L568,270 L585,298 L588,325 L582,355 L562,375 Q500,385 438,375 L418,355 L412,325 L415,298 Z',
     roadPath: '',
   },
-  // Decaying — lower-left
+  // Decaying — west, left flank
   'decayed12345678901234567890123456789012345': {
-    cx: 290, cy: 430,
-    path: 'M228,400 L262,390 L310,395 L345,410 L352,438 L342,465 L315,478 L275,480 L242,468 L225,445 L222,420 Z',
-    roadPath: 'M345,425 L430,380',
+    cx: 250, cy: 340,
+    path: 'M188,305 L222,295 L268,298 L305,312 L312,340 L305,368 L280,385 L248,388 L215,378 L192,358 L185,332 Z',
+    roadPath: 'M305,340 Q380,330 430,322',
   },
-  // Cursed — lower-right
+  // Cursed — east, right flank
   'cursed123456789012345678901234567890123456': {
-    cx: 710, cy: 430,
-    path: 'M652,402 L688,392 L730,396 L762,410 L772,435 L765,462 L742,478 L705,482 L668,472 L650,450 L648,425 Z',
-    roadPath: 'M655,425 L575,380',
+    cx: 750, cy: 340,
+    path: 'M690,305 L725,298 L768,302 L802,318 L810,345 L802,372 L778,388 L748,390 L715,380 L695,360 L688,335 Z',
+    roadPath: 'M695,340 Q620,330 570,322',
   },
-  // Zombie — bottom-left outskirts
+  // Zombie — southwest, coastal outpost
   'zombie123456789012345678901234567890123456': {
-    cx: 230, cy: 575,
-    path: 'M168,545 L202,535 L250,538 L285,552 L292,578 L282,605 L255,620 L215,622 L182,610 L165,588 L162,562 Z',
-    roadPath: 'M280,565 L310,480',
+    cx: 280, cy: 520,
+    path: 'M218,488 L252,478 L298,482 L332,498 L338,522 L330,548 L305,562 L275,565 L242,555 L220,535 L215,510 Z',
+    roadPath: 'M320,510 Q370,430 430,370',
   },
-  // Fallen — bottom-right outskirts
+  // Fallen — southeast, coastal outpost
   'fallen123456789012345678901234567890123456': {
-    cx: 770, cy: 575,
-    path: 'M710,545 L745,535 L790,540 L822,555 L828,580 L818,608 L792,622 L752,625 L718,612 L705,588 L705,562 Z',
-    roadPath: 'M715,568 L695,480',
+    cx: 720, cy: 520,
+    path: 'M660,488 L695,480 L738,485 L768,500 L775,525 L768,552 L745,565 L715,568 L682,558 L662,538 L658,512 Z',
+    roadPath: 'M670,510 Q630,430 570,370',
   },
 };
 
@@ -117,27 +140,37 @@ function seededRand(hash: number, salt: number): number {
 // ── Polygon path generation ──
 
 /**
- * Generate an organic irregular polygon path for a region.
- * Points are distributed around a circle at (cx, cy) with radius,
- * with deterministic wobble from the region's hash.
+ * Generate an elegant cartographic border path for a region.
+ * Uses smooth curves instead of jagged lines for a premium feel.
  */
 function generatePolygonPath(cx: number, cy: number, radius: number, hash: number, vertices: number = 10): string {
   const points: [number, number][] = [];
   for (let i = 0; i < vertices; i++) {
     const angle = (Math.PI * 2 * i) / vertices - Math.PI / 2;
-    // Wobble: ±15% of radius, deterministic per vertex
-    const wobble = 1 + (seededRand(hash, i * 7) - 0.5) * 0.3;
+    // Gentle wobble: ±12% of radius (more controlled than before)
+    const wobble = 1 + (seededRand(hash, i * 7) - 0.5) * 0.24;
     const r = radius * wobble;
     const x = cx + Math.cos(angle) * r;
     const y = cy + Math.sin(angle) * r;
     points.push([x, y]);
   }
 
-  // Build SVG path with slight curve between points for organic feel
+  // Build SVG path with quadratic curves for smooth borders
+  if (points.length < 3) return '';
   const [first, ...rest] = points;
-  let d = `M${first[0].toFixed(0)},${first[1].toFixed(0)}`;
-  for (const [x, y] of rest) {
-    d += ` L${x.toFixed(0)},${y.toFixed(0)}`;
+
+  // Start at midpoint between last and first point for smooth closure
+  const lastPt = points[points.length - 1];
+  const startX = (lastPt[0] + first[0]) / 2;
+  const startY = (lastPt[1] + first[1]) / 2;
+
+  let d = `M${startX.toFixed(1)},${startY.toFixed(1)}`;
+  for (let i = 0; i < points.length; i++) {
+    const curr = points[i];
+    const next = points[(i + 1) % points.length];
+    const midX = (curr[0] + next[0]) / 2;
+    const midY = (curr[1] + next[1]) / 2;
+    d += ` Q${curr[0].toFixed(1)},${curr[1].toFixed(1)} ${midX.toFixed(1)},${midY.toFixed(1)}`;
   }
   d += ' Z';
   return d;
@@ -146,13 +179,13 @@ function generatePolygonPath(cx: number, cy: number, radius: number, hash: numbe
 /** Generate a road SVG path from a region center to the kingdom hub */
 function generateRoadPath(cx: number, cy: number, hubX: number, hubY: number): string {
   if (Math.abs(cx - hubX) < 10 && Math.abs(cy - hubY) < 10) return '';
-  // Simple line; slightly curved through a midpoint offset
-  const midX = (cx + hubX) / 2;
+  // Curved road with a natural-feeling control point
+  const midX = (cx + hubX) / 2 + (cy > hubY ? -15 : 15);
   const midY = (cy + hubY) / 2;
   return `M${cx.toFixed(0)},${cy.toFixed(0)} Q${midX.toFixed(0)},${midY.toFixed(0)} ${hubX.toFixed(0)},${hubY.toFixed(0)}`;
 }
 
-// ── Ring placement ──
+// ── Grid placement ──
 
 interface PlacedRegion {
   id: string;
@@ -161,78 +194,36 @@ interface PlacedRegion {
   radius: number;
 }
 
-/**
- * Compute the radius for a region based on importance.
- * Importance 0 → MIN_RADIUS, importance 1 → MAX_RADIUS.
- */
 function importanceToRadius(importance: number): number {
   return MIN_RADIUS + importance * (MAX_RADIUS - MIN_RADIUS);
 }
 
 /**
- * Place regions in concentric elliptical rings around the kingdom center.
- * Ring 0 = single region at center (highest importance).
- * Ring 1+ = distributed evenly around ellipses of increasing radius.
- *
- * Ring capacities: ring 1 = up to 6, ring 2 = up to 10, ring 3+ = up to 14.
- * This ensures the map scales to 30+ regions without overlap.
+ * Place regions in the structured 3×3 grid.
+ * Sorted by importance: most important gets center slot.
  */
-function placeInRings(sorted: MapRegion[]): PlacedRegion[] {
+function placeInGrid(sorted: MapRegion[]): PlacedRegion[] {
   if (sorted.length === 0) return [];
 
   const placed: PlacedRegion[] = [];
 
-  // Ring 0: the single most important region at center
-  const center = sorted[0];
-  placed.push({
-    id: center.id,
-    cx: CX,
-    cy: CY,
-    radius: importanceToRadius(center.importance),
-  });
-
-  // Remaining regions distributed into rings
-  const remaining = sorted.slice(1);
-  const ringCapacities = [6, 10, 14, 18, 22]; // ring 1–5
-  const ringBaseRadii = [140, 240, 330, 410, 480]; // ellipse semi-major axis
-
-  let idx = 0;
-  for (let ring = 0; ring < ringCapacities.length && idx < remaining.length; ring++) {
-    const capacity = ringCapacities[ring];
-    const ringRadius = ringBaseRadii[ring];
-    const count = Math.min(capacity, remaining.length - idx);
-
-    for (let i = 0; i < count; i++) {
-      const region = remaining[idx + i];
-      const r = importanceToRadius(region.importance);
-
-      // Distribute evenly around the ring with a slight offset per ring
-      const angleOffset = ring * 0.3; // stagger rings so they don't align
-      const angle = (Math.PI * 2 * i) / count - Math.PI / 2 + angleOffset;
-
-      // Elliptical: wider horizontally (1000 vs 700 canvas)
-      const ellipseRatioX = 1.0;
-      const ellipseRatioY = 0.75;
-
-      let px = CX + Math.cos(angle) * ringRadius * ellipseRatioX;
-      let py = CY + Math.sin(angle) * ringRadius * ellipseRatioY;
-
-      // Clamp to map bounds
-      px = Math.max(PADDING + r, Math.min(MAP_W - PADDING - r, px));
-      py = Math.max(PADDING + r, Math.min(MAP_H - PADDING - r, py));
-
-      placed.push({ id: region.id, cx: px, cy: py, radius: r });
-    }
-
-    idx += count;
+  for (let i = 0; i < sorted.length && i < GRID_SLOTS.length; i++) {
+    const region = sorted[i];
+    const slot = GRID_SLOTS[i];
+    placed.push({
+      id: region.id,
+      cx: slot.cx,
+      cy: slot.cy,
+      radius: importanceToRadius(region.importance),
+    });
   }
 
-  // Overflow: place any remaining beyond ring 5 in a final outer ring
-  if (idx < remaining.length) {
-    const outerRadius = 520;
-    const overflowCount = remaining.length - idx;
+  // Overflow beyond grid slots: distribute in outer ring
+  if (sorted.length > GRID_SLOTS.length) {
+    const overflowCount = sorted.length - GRID_SLOTS.length;
+    const outerRadius = 420;
     for (let i = 0; i < overflowCount; i++) {
-      const region = remaining[idx + i];
+      const region = sorted[GRID_SLOTS.length + i];
       const r = importanceToRadius(region.importance);
       const angle = (Math.PI * 2 * i) / overflowCount - Math.PI / 2 + 0.2;
 
@@ -250,18 +241,12 @@ function placeInRings(sorted: MapRegion[]): PlacedRegion[] {
 
 // ── Road network generation ──
 
-/**
- * Generate roads connecting regions. Strategy:
- * - Every region connects to the center hub
- * - Adjacent ring neighbors get inter-ring roads
- */
 function generateRoadNetwork(placed: PlacedRegion[]): string[] {
   if (placed.length === 0) return [];
 
   const roads: string[] = [];
-  const hub = placed[0]; // Center region is the hub
+  const hub = placed[0];
 
-  // Each non-center region connects to hub
   for (let i = 1; i < placed.length; i++) {
     const r = placed[i];
     const road = generateRoadPath(r.cx, r.cy, hub.cx, hub.cy);
@@ -273,11 +258,9 @@ function generateRoadNetwork(placed: PlacedRegion[]): string[] {
 
 // ── Kingdom wall generation ──
 
-/** Generate a kingdom wall that encloses all placed regions */
 function generateKingdomWall(placed: PlacedRegion[]): string {
   if (placed.length === 0) return KINGDOM_WALL_PATH;
 
-  // Find the bounding box of all regions with padding
   let minX = MAP_W, minY = MAP_H, maxX = 0, maxY = 0;
   for (const p of placed) {
     minX = Math.min(minX, p.cx - p.radius);
@@ -286,7 +269,6 @@ function generateKingdomWall(placed: PlacedRegion[]): string {
     maxY = Math.max(maxY, p.cy + p.radius);
   }
 
-  // Expand with padding
   const pad = 50;
   minX = Math.max(20, minX - pad);
   minY = Math.max(20, minY - pad);
@@ -296,30 +278,60 @@ function generateKingdomWall(placed: PlacedRegion[]): string {
   const midX = (minX + maxX) / 2;
   const midY = (minY + maxY) / 2;
 
-  // Organic rounded rectangle-ish wall
   return `M${minX},${midY} Q${minX},${minY} ${midX},${minY} Q${maxX},${minY} ${maxX},${midY} Q${maxX},${maxY} ${midX},${maxY} Q${minX},${maxY} ${minX},${midY} Z`;
 }
+
+// ── Terrain features (static decorative SVG paths) ──
+
+/** Continuous northern mountain ridge */
+export const MOUNTAIN_RIDGE_PATH =
+  'M40,60 L80,32 L110,50 L145,20 L180,45 L220,15 L260,40 L300,18 L340,42 L380,12 L420,38 L460,8 L500,35 L540,10 L580,38 L620,14 L660,42 L700,20 L740,45 L780,18 L820,40 L860,25 L900,48 L940,30 L960,55';
+
+/** Mountain peak icons (positioned along the ridge) */
+export const MOUNTAIN_PEAKS: Array<{ cx: number; cy: number; scale: number }> = [
+  { cx: 145, cy: 22, scale: 1.0 },
+  { cx: 260, cy: 38, scale: 0.8 },
+  { cx: 380, cy: 14, scale: 1.1 },
+  { cx: 500, cy: 10, scale: 1.3 },
+  { cx: 620, cy: 16, scale: 1.0 },
+  { cx: 740, cy: 42, scale: 0.9 },
+  { cx: 860, cy: 27, scale: 0.85 },
+];
+
+/** River paths (originate from northern mountains, flow south naturally) */
+export const RIVER_PATHS: string[] = [
+  // Main river — flows from central mountains to southern sea
+  'M500,35 C495,80 480,130 470,180 C455,230 440,280 435,320 C430,360 425,410 430,460 C435,510 445,560 460,600 C470,630 480,650 490,670',
+  // Tributary — branches west from main river
+  'M470,180 C440,200 400,220 360,245 C320,270 290,300 270,340 C255,370 245,410 240,450',
+];
+
+/** Forest cluster positions (compact, near borders) */
+export const FOREST_CLUSTERS: Array<{ cx: number; cy: number; count: number; spread: number }> = [
+  { cx: 120, cy: 120, count: 5, spread: 25 },   // NW forest
+  { cx: 880, cy: 110, count: 4, spread: 22 },    // NE forest
+  { cx: 150, cy: 400, count: 4, spread: 20 },    // W border forest
+  { cx: 850, cy: 420, count: 4, spread: 20 },    // E border forest
+  { cx: 400, cy: 600, count: 3, spread: 18 },    // S coastal woods
+  { cx: 620, cy: 590, count: 3, spread: 18 },    // SE coastal woods
+];
+
+/** Southern coastline path (replaces excessive empty bottom-left) */
+export const COASTLINE_PATH =
+  'M30,620 C80,600 140,610 200,625 C260,640 330,650 400,645 C470,640 540,648 610,655 C680,662 750,655 820,640 C880,628 930,618 970,625';
+
+/** Sea area below coastline (for subtle fill) */
+export const SEA_AREA_PATH =
+  'M30,620 C80,600 140,610 200,625 C260,640 330,650 400,645 C470,640 540,648 610,655 C680,662 750,655 820,640 C880,628 930,618 970,625 L970,700 L30,700 Z';
 
 // ── Public API ──
 
 export interface ComputedMapLayout {
-  /** Layout per region, keyed by region id */
   layouts: Record<string, RegionLayout>;
-  /** Kingdom outer wall SVG path */
   wallPath: string;
-  /** Road network SVG paths */
   roads: string[];
 }
 
-/**
- * Compute the full map layout for a set of regions.
- *
- * If all regions are known presets (the 8 demo tokens), uses the hand-tuned
- * static layouts for maximum visual quality. Otherwise, falls back to the
- * dynamic layout engine.
- *
- * Fully deterministic: same input regions → same output layout.
- */
 export function computeMapLayout(regions: MapRegion[]): ComputedMapLayout {
   // Fast path: all regions are known presets
   if (allHaveStaticLayouts(regions)) {
@@ -334,17 +346,15 @@ export function computeMapLayout(regions: MapRegion[]): ComputedMapLayout {
     };
   }
 
-  // Dynamic path: sort by importance, place in rings
+  // Dynamic path: sort by importance, place in grid
   const sorted = [...regions].sort((a, b) => b.importance - a.importance);
-  const placed = placeInRings(sorted);
+  const placed = placeInGrid(sorted);
 
-  // Build layout map
   const layouts: Record<string, RegionLayout> = {};
-  const regionMap = new Map(regions.map(r => [r.id, r]));
 
   for (const p of placed) {
     const hash = hashStr(p.id);
-    const vertices = 8 + Math.round(seededRand(hash, 99) * 4); // 8–12 vertices
+    const vertices = 8 + Math.round(seededRand(hash, 99) * 4);
     layouts[p.id] = {
       cx: Math.round(p.cx),
       cy: Math.round(p.cy),
@@ -360,31 +370,28 @@ export function computeMapLayout(regions: MapRegion[]): ComputedMapLayout {
   };
 }
 
-// ── Legacy exports (backward compatibility) ──
+// ── Legacy exports ──
 
-/** @deprecated Use computeMapLayout() instead for dynamic layout. */
 export const REGION_LAYOUTS = STATIC_LAYOUTS;
 
-/** Static kingdom wall for the preset layout */
+/** Kingdom wall — elegant organic shape */
 export const KINGDOM_WALL_PATH =
-  'M180,40 Q500,10 820,40 Q920,100 900,250 Q910,450 870,580 Q780,680 500,690 Q220,680 130,580 Q90,450 100,250 Q80,100 180,40 Z';
+  'M160,55 Q500,20 840,55 Q920,120 900,260 Q910,440 870,570 Q780,660 500,670 Q220,660 130,570 Q90,440 100,260 Q80,120 160,55 Z';
 
-/** Static road network for the preset layout */
+/** Road network for preset layout */
 export const ROAD_NETWORK: string[] = [
-  'M500,285 L500,170',
-  'M438,330 L375,260',
-  'M562,330 L625,260',
-  'M440,375 L345,410',
-  'M560,375 L650,410',
-  'M255,270 L240,400',
-  'M735,270 L755,400',
-  'M230,465 L225,540',
-  'M760,465 L765,540',
+  'M500,255 Q500,200 500,168',                      // Center → N
+  'M432,290 Q370,230 335,155',                       // Center → NW
+  'M568,290 Q630,230 665,155',                       // Center → NE
+  'M415,325 Q350,335 305,340',                       // Center → W
+  'M585,325 Q650,335 695,340',                       // Center → E
+  'M430,370 Q370,430 320,510',                       // Center → SW
+  'M570,370 Q630,430 670,510',                       // Center → SE
 ];
 
 /**
  * Tiny castle silhouette SVG paths per tier.
- * Drawn relative to (0,0) — translate to region center.
+ * Standardized scale — all drawn at similar bounding size.
  */
 export const CASTLE_ICONS: Record<string, string> = {
   keep:     'M-6,-12 L-6,-4 L-10,-4 L-10,4 L10,4 L10,-4 L6,-4 L6,-12 L3,-12 L3,-16 L-3,-16 L-3,-12 Z',

@@ -1,8 +1,15 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
+  import maplibregl from 'maplibre-gl';
+  import 'maplibre-gl/dist/maplibre-gl.css';
   import type { MapRegion } from '$lib/types';
-  import { computeMapLayout, CASTLE_ICONS } from '$lib/map/mapLayout';
-  import { getRegionStyle, tierScale, formatMapMcap, phaseLabel } from '$lib/map/mapTheme';
+  import { getRegionStyle, tierDisplayName, formatMapMcap, phaseLabel } from '$lib/map/mapTheme';
   import { getRegionNames } from '$lib/map/mapNames';
+
+  /** Format token name for map display (truncate long names) */
+  function displayTokenName(name: string): string {
+    return name.length > 18 ? name.slice(0, 16) + '…' : name;
+  }
 
   export let regions: MapRegion[];
   export let selectedId: string | null = null;
@@ -12,521 +19,360 @@
   /** When true, the map is fading out (opacity → 0) */
   export let fading: boolean = false;
 
-  let hoveredId: string | null = null;
+  let mapContainer: HTMLDivElement;
+  let map: maplibregl.Map | null = null;
+  let mapReady = false;
 
-  // Derived: is any region currently hovered?
-  $: anyHovered = hoveredId !== null;
+  // ── Preview card state ──
+  let previewRegion: MapRegion | null = null;
+  let cardX = 0;
+  let cardY = 0;
 
-  // Compute layout from regions (reactive, recalculates when regions change)
-  $: mapLayout = computeMapLayout(regions);
+  // ── Marker tracking ──
+  const markerMap = new Map<string, { marker: maplibregl.Marker; el: HTMLDivElement }>();
+  /** Track image URLs that failed to load (CORS etc.) so we don't retry them */
+  const failedImageUrls = new Set<string>();
 
-  function getLayout(id: string) {
-    return mapLayout.layouts[id] ?? null;
+  // ── Deterministic hash for token address → coordinates ──
+  function hashString(str: string): number {
+    let hash = 5381;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
+    }
+    return Math.abs(hash);
   }
 
-  function getCastleIcon(tier: string): string {
-    return CASTLE_ICONS[tier] ?? CASTLE_ICONS.keep;
+  /** Map token address → deterministic lat/lng spread across a tighter area */
+  function getRegionCoords(id: string): [number, number] {
+    const h = hashString(id);
+    // Tighter spread: ~6° longitude × ~4° latitude (a few states' worth)
+    const lng = -87 + (h % 600) / 100;
+    const lat = 36 + ((h >>> 12) % 400) / 100;
+    return [lng, lat];
   }
 
-  /**
-   * Proximity-based scale factor: regions closer to the kingdom center
-   * appear slightly larger, peripheral regions shrink.
-   * Returns 0.7 (far) to 1.0 (center).
-   */
-  function proximityScale(cx: number, cy: number): number {
-    const dx = cx - 500;  // kingdom center X
-    const dy = cy - 340;  // kingdom center Y
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const maxDist = 400;  // max meaningful distance
-    const t = Math.min(1, dist / maxDist);
-    return 1.0 - t * 0.3; // 1.0 at center, 0.7 at edges
+  function handleMarkerClick(region: MapRegion) {
+    // Toggle: clicking same region closes the card
+    if (previewRegion?.id === region.id) {
+      previewRegion = null;
+      return;
+    }
+    previewRegion = region;
+    updateCardPosition(region);
   }
 
-  // Expanded viewBox constants — adds generous negative space around the kingdom
-  const VB_X = -200;
-  const VB_Y = -120;
-  const VB_W = 1400;
-  const VB_H = 940;
+  function updateCardPosition(region: MapRegion) {
+    if (!map) return;
+    const coords = getRegionCoords(region.id);
+    const point = map.project(coords as [number, number]);
+    cardX = point.x + 20;
+    cardY = point.y - 60;
 
-  // Compute the CSS transform for the zoom effect
-  $: zoomStyle = (() => {
-    if (!zoomTargetId) return '';
-    const layout = mapLayout.layouts[zoomTargetId];
-    if (!layout) return '';
-    // Zoom toward the region center (SVG coords → percentage offsets within expanded viewBox)
-    const originX = ((layout.cx - VB_X) / VB_W) * 100;
-    const originY = ((layout.cy - VB_Y) / VB_H) * 100;
-    return `transform-origin: ${originX}% ${originY}%; transform: scale(5);`;
-  })();
+    // Clamp to viewport
+    const vw = mapContainer?.clientWidth ?? 800;
+    const vh = mapContainer?.clientHeight ?? 600;
+    if (cardX + 290 > vw) cardX = point.x - 300;
+    if (cardX < 10) cardX = 10;
+    if (cardY + 320 > vh) cardY = vh - 330;
+    if (cardY < 10) cardY = 10;
+  }
+
+  function closePreview() {
+    previewRegion = null;
+  }
+
+  function handleViewCastle() {
+    if (!previewRegion) return;
+    const id = previewRegion.id;
+    closePreview();
+    onRegionClick(id);
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && previewRegion) {
+      closePreview();
+    }
+  }
+
+  /** Create or update a marker DOM element */
+  function createMarkerElement(region: MapRegion): HTMLDivElement {
+    const style = getRegionStyle(region);
+    const names = getRegionNames(region);
+    const el = document.createElement('div');
+    el.className = 'map-marker-wrap';
+    if (region.isLegendary) el.classList.add('legendary');
+    if (region.id === selectedId) el.classList.add('selected');
+
+    const dot = document.createElement('div');
+    dot.className = 'map-marker';
+    dot.style.cssText = `border-color: ${style.stroke};`;
+
+    if (region.imageUrl && !failedImageUrls.has(region.imageUrl)) {
+      // Token image as circular avatar
+      const img = document.createElement('img');
+      img.className = 'marker-img';
+      img.src = region.imageUrl;
+      img.alt = region.symbol;
+      img.draggable = false;
+      img.onerror = () => {
+        // Record this URL so we never retry it
+        if (region.imageUrl) failedImageUrls.add(region.imageUrl);
+        img.remove();
+        dot.style.background = style.fill;
+        dot.innerHTML = `<span class="marker-symbol">${region.symbol.slice(0, 4)}</span>`;
+      };
+      dot.appendChild(img);
+    } else {
+      // Fallback: colored dot with symbol
+      dot.style.background = style.fill;
+      dot.innerHTML = `<span class="marker-symbol">${region.symbol.slice(0, 4)}</span>`;
+    }
+
+    const label = document.createElement('div');
+    label.className = 'marker-label';
+    label.style.color = style.labelColor;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'marker-name';
+    nameSpan.textContent = displayTokenName(region.name);
+    label.appendChild(nameSpan);
+
+    const tierSpan = document.createElement('span');
+    tierSpan.className = 'marker-tier';
+    tierSpan.textContent = tierDisplayName(region.tier);
+    label.appendChild(tierSpan);
+
+    el.appendChild(dot);
+    el.appendChild(label);
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleMarkerClick(region);
+    });
+    return el;
+  }
+
+  /** Sync markers with current regions */
+  function syncMarkers() {
+    if (!map || !mapReady) return;
+
+    const currentIds = new Set(regions.map(r => r.id));
+
+    // Remove markers for regions that no longer exist
+    for (const [id, entry] of markerMap) {
+      if (!currentIds.has(id)) {
+        entry.marker.remove();
+        markerMap.delete(id);
+      }
+    }
+
+    // Add/update markers
+    for (const region of regions) {
+      const coords = getRegionCoords(region.id);
+      const existing = markerMap.get(region.id);
+
+      if (existing) {
+        // Update styling
+        const style = getRegionStyle(region);
+        const names = getRegionNames(region);
+        const dot = existing.el.querySelector('.map-marker') as HTMLDivElement | null;
+        if (dot) {
+          dot.style.borderColor = style.stroke;
+          // Update image src only if it actually changed and hasn't failed before
+          const img = dot.querySelector('.marker-img') as HTMLImageElement | null;
+          if (region.imageUrl && img && img.src !== region.imageUrl && !failedImageUrls.has(region.imageUrl)) {
+            img.src = region.imageUrl;
+          } else if (!region.imageUrl && !img) {
+            dot.style.background = style.fill;
+          }
+        }
+        existing.el.className = 'map-marker-wrap';
+        if (region.isLegendary) existing.el.classList.add('legendary');
+        if (region.id === selectedId) existing.el.classList.add('selected');
+        const symbolSpan = existing.el.querySelector('.marker-symbol');
+        if (symbolSpan) symbolSpan.textContent = region.symbol.slice(0, 4);
+        const labelEl = existing.el.querySelector('.marker-label') as HTMLDivElement | null;
+        if (labelEl) {
+          labelEl.style.color = style.labelColor;
+          const nameEl = labelEl.querySelector('.marker-name');
+          if (nameEl) nameEl.textContent = displayTokenName(region.name);
+          const tierEl = labelEl.querySelector('.marker-tier');
+          if (tierEl) tierEl.textContent = tierDisplayName(region.tier);
+        }
+      } else {
+        // Create new marker
+        const el = createMarkerElement(region);
+        const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+          .setLngLat(coords as [number, number])
+          .addTo(map);
+        markerMap.set(region.id, { marker, el });
+      }
+    }
+  }
+
+  // ── Map lifecycle ──
+  onMount(() => {
+    map = new maplibregl.Map({
+      container: mapContainer,
+      style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+      center: [-84.0, 38.0],
+      zoom: 8,
+      minZoom: 6,
+      maxZoom: 12,
+      pitch: 0,
+      bearing: 0,
+      maxBounds: [[-92, 33], [-76, 43]],
+      attributionControl: false,
+      dragRotate: false,
+    });
+
+    map.touchZoomRotate.disableRotation();
+
+    map.on('load', () => {
+      mapReady = true;
+
+      // Hide real-world text labels so the map feels like our own fantasy world.
+      // Keep roads, water, boundaries, land — just strip city/place/country names.
+      const style = map!.getStyle();
+      if (style?.layers) {
+        for (const layer of style.layers) {
+          // Remove any layer that renders text labels (symbol layers with text-field)
+          if (layer.type === 'symbol' && layer.layout && ('text-field' in layer.layout)) {
+            map!.removeLayer(layer.id);
+          }
+        }
+      }
+
+      syncMarkers();
+    });
+
+    // Reposition preview card when map moves
+    map.on('move', () => {
+      if (previewRegion) {
+        updateCardPosition(previewRegion);
+      }
+    });
+
+    // Click on map (not marker) → close preview
+    map.on('click', () => {
+      if (previewRegion) {
+        closePreview();
+      }
+    });
+  });
+
+  onDestroy(() => {
+    // Clean up markers
+    for (const [, entry] of markerMap) {
+      entry.marker.remove();
+    }
+    markerMap.clear();
+    map?.remove();
+    map = null;
+  });
+
+  // Reactive: sync markers when regions change
+  $: if (mapReady && regions) {
+    syncMarkers();
+  }
+
+  // Reactive: fly to zoom target
+  $: if (zoomTargetId && map && mapReady) {
+    const target = regions.find(r => r.id === zoomTargetId);
+    if (target) {
+      const coords = getRegionCoords(target.id);
+      map.flyTo({ center: coords as [number, number], zoom: 11, duration: 900 });
+    }
+  }
 </script>
 
+<!-- svelte-ignore a11y-no-static-element-interactions -->
 <div
   class="world-map-container"
   class:zooming={zoomTargetId !== null}
   class:fading
-  style={zoomTargetId ? zoomStyle : ''}
+  on:keydown={handleKeydown}
+  tabindex="-1"
 >
-  <svg
-    viewBox="{VB_X} {VB_Y} {VB_W} {VB_H}"
-    preserveAspectRatio="xMidYMid slice"
-    xmlns="http://www.w3.org/2000/svg"
-    class="world-map"
-    role="img"
-    aria-label="Kingdom world map showing castle regions"
-  >
-    <defs>
-      <!-- Parchment background gradient -->
-      <radialGradient id="parchment" cx="50%" cy="45%" r="55%">
-        <stop offset="0%" stop-color="#2a2820" />
-        <stop offset="60%" stop-color="#1e1c18" />
-        <stop offset="100%" stop-color="#14120e" />
-      </radialGradient>
+  <div class="map-wrapper" bind:this={mapContainer}></div>
 
-      <!-- Legendary golden glow filter (double-layered) -->
-      <filter id="legendaryGlow" x="-25%" y="-25%" width="150%" height="150%">
-        <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="blur1" />
-        <feFlood flood-color="#ffd700" flood-opacity="0.35" result="color1" />
-        <feComposite in="color1" in2="blur1" operator="in" result="outerGlow" />
-        <feGaussianBlur in="SourceAlpha" stdDeviation="2" result="blur2" />
-        <feFlood flood-color="#fff0a0" flood-opacity="0.5" result="color2" />
-        <feComposite in="color2" in2="blur2" operator="in" result="innerGlow" />
-        <feMerge>
-          <feMergeNode in="outerGlow" />
-          <feMergeNode in="innerGlow" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
+  <!-- ═══ REGION PREVIEW CARD ═══ -->
+  {#if previewRegion}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
+    <div class="preview-backdrop" on:click={closePreview}></div>
 
-      <!-- Fog filter for zombie regions (distortion + desaturation) -->
-      <filter id="fogFilter" x="-10%" y="-10%" width="120%" height="120%">
-        <feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="3" result="noise" />
-        <feDisplacementMap in="SourceGraphic" in2="noise" scale="4" result="displaced" />
-        <feColorMatrix in="displaced" type="saturate" values="0.3" />
-      </filter>
-
-      <!-- Cursed shimmer filter -->
-      <filter id="cursedFilter" x="-5%" y="-5%" width="110%" height="110%">
-        <feGaussianBlur in="SourceAlpha" stdDeviation="2" result="blur" />
-        <feFlood flood-color="#8a2080" flood-opacity="0.2" result="color" />
-        <feComposite in="color" in2="blur" operator="in" result="glow" />
-        <feMerge>
-          <feMergeNode in="glow" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-
-      <!-- Hover glow -->
-      <filter id="hoverGlow" x="-10%" y="-10%" width="120%" height="120%">
-        <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="blur" />
-        <feFlood flood-color="#ffffff" flood-opacity="0.15" result="color" />
-        <feComposite in="color" in2="blur" operator="in" result="glow" />
-        <feMerge>
-          <feMergeNode in="glow" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-
-      <!-- Selected glow -->
-      <filter id="selectedGlow" x="-15%" y="-15%" width="130%" height="130%">
-        <feGaussianBlur in="SourceAlpha" stdDeviation="5" result="blur" />
-        <feFlood flood-color="#ffd700" flood-opacity="0.3" result="color" />
-        <feComposite in="color" in2="blur" operator="in" result="glow" />
-        <feMerge>
-          <feMergeNode in="glow" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-
-      <!-- Scaffolding hatch pattern -->
-      <pattern id="scaffolding" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-        <line x1="0" y1="0" x2="0" y2="8" stroke="#a88850" stroke-width="0.5" stroke-opacity="0.3" />
-      </pattern>
-
-      <!-- Crack pattern for cursed regions -->
-      <pattern id="cracks" width="20" height="20" patternUnits="userSpaceOnUse">
-        <path d="M3,0 L7,8 L4,14 L8,20" fill="none" stroke="#1a0a1a" stroke-width="0.8" stroke-opacity="0.5" />
-        <path d="M15,0 L12,6 L16,12" fill="none" stroke="#1a0a1a" stroke-width="0.6" stroke-opacity="0.4" />
-      </pattern>
-
-      <!-- Text drop shadow for label readability (soft, warm) -->
-      <filter id="textShadow" x="-15%" y="-15%" width="130%" height="130%">
-        <feDropShadow dx="0" dy="0.8" stdDeviation="2" flood-color="#0a0806" flood-opacity="0.8" />
-      </filter>
-
-      <!-- Legendary text glow (gold shimmer) -->
-      <filter id="legendaryTextGlow" x="-20%" y="-20%" width="140%" height="140%">
-        <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="outerBlur" />
-        <feFlood flood-color="#ffd700" flood-opacity="0.3" result="outerColor" />
-        <feComposite in="outerColor" in2="outerBlur" operator="in" result="outerGlow" />
-        <feGaussianBlur in="SourceAlpha" stdDeviation="1" result="innerBlur" />
-        <feFlood flood-color="#fff4c0" flood-opacity="0.5" result="innerColor" />
-        <feComposite in="innerColor" in2="innerBlur" operator="in" result="innerGlow" />
-        <feMerge>
-          <feMergeNode in="outerGlow" />
-          <feMergeNode in="innerGlow" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-
-      <!-- Edge vignette gradient -->
-      <radialGradient id="vignette" cx="50%" cy="50%" r="55%">
-        <stop offset="0%" stop-color="#000000" stop-opacity="0" />
-        <stop offset="70%" stop-color="#000000" stop-opacity="0" />
-        <stop offset="100%" stop-color="#000000" stop-opacity="0.65" />
-      </radialGradient>
-    </defs>
-
-    <!-- Background (covers full expanded viewBox) -->
-    <rect x={VB_X} y={VB_Y} width={VB_W} height={VB_H} fill="url(#parchment)" />
-
-    <!-- Kingdom crest / emblem — engraved heraldic sigil -->
-    <g class="kingdom-crest" transform="translate(500, -48) scale(0.8)">
-      <!-- Shield outline -->
-      <path
-        d="M0,-50 L38,-38 L42,-5 Q42,25 22,45 L0,58 L-22,45 Q-42,25 -42,-5 L-38,-38 Z"
-        fill="none"
-        stroke="#4a3e2e"
-        stroke-width="1.2"
-        stroke-opacity="0.2"
-      />
-      <!-- Inner shield fill (very faint) -->
-      <path
-        d="M0,-46 L34,-35 L38,-5 Q38,22 20,41 L0,52 L-20,41 Q-38,22 -38,-5 L-34,-35 Z"
-        fill="#2a2418"
-        fill-opacity="0.15"
-      />
-      <!-- Castle silhouette within shield -->
-      <g opacity="0.18" fill="#6a5a42">
-        <!-- Center tower -->
-        <rect x="-5" y="-25" width="10" height="30" />
-        <polygon points="-5,-25 0,-35 5,-25" />
-        <!-- Left tower -->
-        <rect x="-18" y="-15" width="8" height="20" />
-        <polygon points="-18,-15 -14,-22 -10,-15" />
-        <!-- Right tower -->
-        <rect x="10" y="-15" width="8" height="20" />
-        <polygon points="10,-15 14,-22 18,-15" />
-        <!-- Base wall -->
-        <rect x="-22" y="5" width="44" height="8" rx="1" />
-        <!-- Gate -->
-        <rect x="-3" y="2" width="6" height="8" rx="3" fill="#1a1610" />
-        <!-- Battlements -->
-        <rect x="-20" y="2" width="3" height="3" />
-        <rect x="-12" y="2" width="3" height="3" />
-        <rect x="9" y="2" width="3" height="3" />
-        <rect x="17" y="2" width="3" height="3" />
-      </g>
-      <!-- "Est." text beneath shield -->
-      <text
-        x="0" y="72"
-        text-anchor="middle"
-        class="crest-text"
-        fill="#5a4e3a"
-        opacity="0.15"
-        stroke="#0c0a06"
-        stroke-width="1.5"
-        paint-order="stroke fill"
-      >
-        PUMPCASTLE
-      </text>
-    </g>
-
-    <!-- Terrain group (dims when a region is focused) -->
-    <g class="terrain-group" class:terrain-dimmed={anyHovered}>
-      <!-- Subtle terrain texture dots -->
-      {#each Array(40) as _, i}
-        <circle
-          cx={80 + (i * 137 + i * i * 7) % 840}
-          cy={50 + (i * 89 + i * i * 3) % 600}
-          r={1 + (i % 3) * 0.5}
-          fill="#3a3830"
-          opacity={0.3 + (i % 5) * 0.1}
-        />
-      {/each}
-
-      <!-- Kingdom outer wall (subtle) -->
-      <path
-        d={mapLayout.wallPath}
-        fill="none"
-        stroke="#3a3428"
-        stroke-width="2"
-        stroke-opacity="0.35"
-      />
-      <path
-        d={mapLayout.wallPath}
-        fill="none"
-        stroke="#5a4a3a"
-        stroke-width="0.7"
-        stroke-opacity="0.2"
-        stroke-dasharray="12,6"
-      />
-    </g>
-
-    <!-- Road network (thinner, lower contrast) -->
-    <g class="roads" class:roads-dimmed={anyHovered}>
-      {#each mapLayout.roads as road}
-        <path
-          d={road}
-          fill="none"
-          stroke="#4a3e30"
-          stroke-width="1.5"
-          stroke-opacity="0.2"
-          stroke-linecap="round"
-        />
-        <path
-          d={road}
-          fill="none"
-          stroke="#6a5a48"
-          stroke-width="0.6"
-          stroke-opacity="0.15"
-          stroke-dasharray="4,6"
-          stroke-linecap="round"
-        />
-      {/each}
-    </g>
-
-    <!-- Per-region roads to center -->
-    {#each regions as region}
-      {@const layout = getLayout(region.id)}
-      {#if layout && layout.roadPath}
-        <!-- Base road -->
-        <path
-          d={layout.roadPath}
-          fill="none"
-          stroke="#4a3e30"
-          stroke-width="1.2"
-          stroke-opacity="0.18"
-          stroke-linecap="round"
-          class="region-road"
-          class:road-glowing={hoveredId === region.id}
-          class:road-dimmed={anyHovered && hoveredId !== region.id}
-        />
-        <!-- Glow overlay (only visible when this region is hovered) -->
-        {#if hoveredId === region.id}
-          <path
-            d={layout.roadPath}
-            fill="none"
-            stroke={getRegionStyle(region).labelColor}
-            stroke-width="3"
-            stroke-opacity="0.18"
-            stroke-linecap="round"
-            class="road-glow-overlay"
+    {@const pStyle = getRegionStyle(previewRegion)}
+    {@const pNames = getRegionNames(previewRegion)}
+    <div
+      class="region-preview-card"
+      class:legendary={previewRegion.isLegendary}
+      style="left: {cardX}px; top: {cardY}px;"
+    >
+      <!-- Header: token image + token name + kingdom title -->
+      <div class="preview-header">
+        {#if previewRegion.imageUrl && !failedImageUrls.has(previewRegion.imageUrl)}
+          <!-- svelte-ignore a11y-missing-attribute -->
+          <img
+            class="preview-avatar"
+            src={previewRegion.imageUrl}
+            alt={previewRegion.symbol}
+            on:error={() => { if (previewRegion?.imageUrl) failedImageUrls.add(previewRegion.imageUrl); }}
           />
         {/if}
-      {/if}
-    {/each}
+        <div class="preview-title-group">
+          <span class="preview-castle-name" style="color: {pStyle.labelColor}">
+            {previewRegion.name}
+            <span class="preview-token-sym">({previewRegion.symbol})</span>
+          </span>
+          <span class="preview-district">{tierDisplayName(previewRegion.tier)} &middot; {pNames.districtName}</span>
+        </div>
+        <button class="preview-close" on:click={closePreview}>&times;</button>
+      </div>
 
-    <!-- Regions -->
-    {#each regions as region}
-      {@const layout = getLayout(region.id)}
-      {@const style = getRegionStyle(region)}
-      {@const baseTierScale = tierScale(region.tier)}
-      {@const pxScale = layout ? proximityScale(layout.cx, layout.cy) : 1}
-      {@const scale = baseTierScale * pxScale}
-      {@const names = getRegionNames(region)}
-      {@const isHovered = hoveredId === region.id}
-      {@const isSelected = selectedId === region.id}
-      {#if layout}
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <g
-          class="region"
-          class:hovered={isHovered}
-          class:selected={isSelected}
-          class:legendary={region.isLegendary}
-          class:dimmed={anyHovered && !isHovered && !isSelected}
-          on:click={() => onRegionClick(region.id)}
-          on:mouseenter={() => hoveredId = region.id}
-          on:mouseleave={() => hoveredId = null}
-          filter={isSelected ? 'url(#selectedGlow)' : isHovered ? 'url(#hoverGlow)' : style.filter}
-        >
-          <!-- Region fill -->
-          <path
-            d={layout.path}
-            fill={style.fill}
-            stroke={style.stroke}
-            stroke-width={style.strokeWidth}
-            stroke-dasharray={style.strokeDasharray}
-            stroke-linejoin="round"
-          />
+      <!-- Divider -->
+      <div class="preview-divider"></div>
 
-          <!-- State overlay patterns -->
-          {#if style.overlay === 'scaffolding'}
-            <path d={layout.path} fill="url(#scaffolding)" stroke="none" />
-            <!-- Dashed construction border emphasis -->
-            <path d={layout.path} fill="none" stroke="#a88850" stroke-width="1" stroke-dasharray="3,5" stroke-opacity="0.4" />
-          {:else if style.overlay === 'cracks'}
-            <path d={layout.path} fill="url(#cracks)" stroke="none" />
-            <!-- Purple cursed inner glow -->
-            <path d={layout.path} fill="#5a1a5a" fill-opacity="0.15" stroke="none" />
-          {:else if style.overlay === 'fog'}
-            <path d={layout.path} fill="#1a2a1a" fill-opacity="0.4" stroke="none" />
-            <!-- Wispy fog edge -->
-            <path d={layout.path} fill="none" stroke="#3a5a3a" stroke-width="2" stroke-opacity="0.25" stroke-dasharray="8,12" />
-          {/if}
+      <!-- Token info -->
+      <div class="preview-info">
+        <div class="preview-row">
+          <span class="preview-label">Castle</span>
+          <span class="preview-value" style="color: {pStyle.labelColor}">
+            {pNames.castleName}
+          </span>
+        </div>
+        <div class="preview-row">
+          <span class="preview-label">Phase</span>
+          <span class="preview-value">{phaseLabel(previewRegion.phase)}</span>
+        </div>
+        <div class="preview-row">
+          <span class="preview-label">Market Cap</span>
+          <span class="preview-value">{formatMapMcap(previewRegion.marketCap)}</span>
+        </div>
+        <div class="preview-row">
+          <span class="preview-label">ATH</span>
+          <span class="preview-value">{formatMapMcap(previewRegion.athMarketCap)}</span>
+        </div>
+      </div>
 
-          <!-- Legendary gold inner border (double-layered with pulse) -->
-          {#if region.isLegendary}
-            <path
-              d={layout.path}
-              fill="none"
-              stroke="#ffd700"
-              stroke-width="3"
-              stroke-opacity="0.5"
-              class="legendary-stroke-outer"
-            />
-            <path
-              class="legendary-stroke"
-              d={layout.path}
-              fill="none"
-              stroke="#fff0a0"
-              stroke-width="1.5"
-              stroke-opacity="0.7"
-              transform="scale(0.96) translate({layout.cx * 0.04} {layout.cy * 0.04})"
-            />
-          {/if}
+      <!-- Lore -->
+      <div class="preview-lore">&ldquo;{pNames.loreTag}&rdquo;</div>
 
-          <!-- Castle icon -->
-          <g transform="translate({layout.cx} {layout.cy}) scale({scale * 0.9})">
-            <path
-              d={getCastleIcon(region.tier)}
-              fill={style.iconFill}
-              stroke={style.iconStroke}
-              stroke-width="1"
-              stroke-linejoin="round"
-            />
-            {#if region.isLegendary}
-              <!-- Crown / star above castle -->
-              <path
-                d="M-4,-26 L0,-30 L4,-26 L2,-26 L0,-28 L-2,-26 Z"
-                fill="#ffd700"
-                stroke="#c8a800"
-                stroke-width="0.5"
-              />
-            {/if}
-            {#if region.phase === 'thriving'}
-              <!-- Flag on castle -->
-              <line x1="0" y1="-18" x2="0" y2="-26" stroke={style.iconStroke} stroke-width="0.8" />
-              <path d="M0,-26 L8,-24 L0,-22 Z" fill="#d04040" stroke="none" opacity="0.9" />
-            {/if}
-          </g>
+      <!-- View Castle button -->
+      <button class="preview-view-btn" on:click={handleViewCastle}>
+        View Castle &rarr;
+      </button>
+    </div>
+  {/if}
 
-          <!-- Label group with backing, shadow and tier-based scaling -->
-          <g class="label-group" class:legendary-labels={region.isLegendary} filter={region.isLegendary ? 'url(#legendaryTextGlow)' : 'url(#textShadow)'} font-size={scale > 1 ? `${100 + (scale - 1) * 30}%` : '100%'}>
-            <!-- Semi-transparent backing pill (expands on hover to fit more labels) -->
-            <rect
-              x={layout.cx - 46 * scale}
-              y={layout.cy + 11 * scale}
-              width={92 * scale}
-              height={(isHovered || isSelected ? 48 : 22) * scale}
-              rx={6}
-              ry={6}
-              fill="#0c0a06"
-              fill-opacity={isHovered || isSelected ? 0.55 : 0.3}
-              class="label-backing"
-            />
-
-            <!-- Castle name (primary label — engraved serif) -->
-            <text
-              x={layout.cx}
-              y={layout.cy + 23 * scale}
-              text-anchor="middle"
-              class="region-name"
-              fill={style.labelColor}
-              font-weight={isSelected || isHovered ? '600' : '500'}
-              stroke="#100e08"
-              stroke-width="2"
-              paint-order="stroke fill"
-            >
-              {names.castleName}
-            </text>
-
-            <!-- District name (hover-only) -->
-            <text
-              x={layout.cx}
-              y={layout.cy + 34 * scale}
-              text-anchor="middle"
-              class="region-district"
-              class:visible={isHovered || isSelected}
-              fill={style.labelColor}
-              opacity="0"
-              stroke="#100e08"
-              stroke-width="1.5"
-              paint-order="stroke fill"
-            >
-              {names.districtName}
-            </text>
-
-            <!-- Market cap (hover-only, subtle meta) -->
-            <text
-              x={layout.cx}
-              y={layout.cy + 44 * scale}
-              text-anchor="middle"
-              class="region-mcap"
-              class:visible={isHovered || isSelected}
-              fill={style.labelColor}
-              opacity="0"
-              stroke="#100e08"
-              stroke-width="1.5"
-              paint-order="stroke fill"
-            >
-              {formatMapMcap(region.marketCap)}
-            </text>
-          </g>
-
-          <!-- Lore tag (subtle italic, shown on hover/select) -->
-          <text
-            x={layout.cx}
-            y={layout.cy + 56 * scale}
-            text-anchor="middle"
-            class="region-lore"
-            class:visible={isHovered || isSelected}
-            fill={style.labelColor}
-            opacity="0"
-            stroke="#100e08"
-            stroke-width="1.5"
-            paint-order="stroke fill"
-          >
-            {names.loreTag}
-          </text>
-        </g>
-      {/if}
-    {/each}
-
-    <!-- Decorative corner trees (dims with terrain) -->
-    <g class="terrain-group" class:terrain-dimmed={anyHovered}>
-      {#each [[80, 80], [920, 80], [80, 620], [920, 620], [50, 350], [950, 350]] as [tx, ty]}
-        <g transform="translate({tx} {ty})" opacity="0.25">
-          <circle cx="0" cy="2" r="6" fill="#2a3a20" />
-          <circle cx="-4" cy="-2" r="5" fill="#2a3a20" />
-          <circle cx="4" cy="-2" r="5" fill="#2a3a20" />
-          <circle cx="0" cy="-5" r="4" fill="#3a4a30" />
-        </g>
-      {/each}
-    </g>
-
-    <!-- Title cartouche (dims with terrain) -->
-    <g class="terrain-group" class:terrain-dimmed={anyHovered} transform="translate(500, 730)">
-      <!-- Decorative rule lines flanking title -->
-      <line x1="-160" y1="0" x2="-60" y2="0" stroke="#6a5a40" stroke-width="0.6" stroke-opacity="0.3" />
-      <line x1="60" y1="0" x2="160" y2="0" stroke="#6a5a40" stroke-width="0.6" stroke-opacity="0.3" />
-      <text
-        x="0" y="4"
-        text-anchor="middle"
-        class="map-title"
-        fill="#a09070"
-        opacity="0.55"
-        stroke="#0c0a06"
-        stroke-width="2.5"
-        paint-order="stroke fill"
-      >
-        The Kingdom of Pumpcastle
-      </text>
-    </g>
-
-    <!-- Edge vignette (on top of everything, non-interactive) -->
-    <rect x={VB_X} y={VB_Y} width={VB_W} height={VB_H} fill="url(#vignette)" pointer-events="none" />
-  </svg>
+  <!-- ═══ BOTTOM ENVIRONMENT STRIP ═══ -->
+  <div class="env-strip">
+    <div class="env-line"></div>
+    <div class="env-content">
+      <span class="env-brand">PUMPCASTLE</span>
+      <span class="env-separator">&middot;</span>
+      <span class="env-tagline">{regions.length} kingdoms tracked</span>
+    </div>
+  </div>
 </div>
 
 <style>
@@ -534,16 +380,9 @@
     position: fixed;
     inset: 0;
     z-index: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #0e0d0a;
-    overflow: hidden;
-    transform: scale(1);
     opacity: 1;
-    transition: transform 0.9s cubic-bezier(0.4, 0, 0.1, 1),
-                opacity 0.9s cubic-bezier(0.4, 0, 0.1, 1);
-    will-change: transform, opacity;
+    transition: opacity 0.9s cubic-bezier(0.4, 0, 0.1, 1);
+    will-change: opacity;
   }
 
   .world-map-container.zooming {
@@ -555,188 +394,380 @@
     transition: opacity 0.4s ease;
   }
 
-  .world-map {
+  .map-wrapper {
     width: 100%;
     height: 100%;
   }
 
-  .region {
+  /* ═══ MAP MARKERS ═══ */
+
+  :global(.map-marker-wrap) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
     cursor: pointer;
-    opacity: 1;
-    transition: transform 0.2s ease, opacity 0.4s ease;
-    transform-origin: center;
   }
 
-  .region:hover {
-    transform: scale(1.02);
+  :global(.map-marker-wrap:hover .map-marker) {
+    transform: scale(1.2);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(255, 255, 255, 0.08);
   }
 
-  .region.selected {
-    transform: scale(1.03);
+  :global(.map-marker-wrap.selected .map-marker) {
+    border-color: #ffd700 !important;
+    box-shadow: 0 0 16px rgba(255, 215, 0, 0.3), 0 2px 12px rgba(0, 0, 0, 0.4);
   }
 
-  /* ── Fantasy typography system (Cinzel serif) ── */
+  :global(.map-marker-wrap.legendary .map-marker) {
+    border-color: #ffd700 !important;
+    animation: markerPulse 2.5s ease-in-out infinite;
+  }
 
-  .region-name {
-    font-family: 'Cinzel', 'Georgia', serif;
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
+  :global(.map-marker) {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 2px solid;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    backdrop-filter: blur(16px) saturate(1.4);
+    box-shadow:
+      0 4px 20px rgba(0, 0, 0, 0.30),
+      inset 0 1px 0 rgba(255, 255, 255, 0.15),
+      inset 0 0 10px rgba(255, 255, 255, 0.04);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  :global(.marker-img) {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
     pointer-events: none;
+    user-select: none;
   }
 
-  .region-district {
-    font-family: 'Cinzel', 'Georgia', serif;
-    font-size: 7.5px;
-    font-weight: 400;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    pointer-events: none;
-    transition: opacity 0.3s ease;
+  @keyframes markerPulse {
+    0%, 100% { box-shadow: 0 0 8px rgba(255, 215, 0, 0.2), 0 2px 12px rgba(0, 0, 0, 0.4); }
+    50% { box-shadow: 0 0 20px rgba(255, 215, 0, 0.4), 0 2px 12px rgba(0, 0, 0, 0.4); }
   }
 
-  .region-district.visible {
-    opacity: 0.55 !important;
-  }
-
-  .region-mcap {
+  :global(.marker-symbol) {
     font-family: 'Inter', system-ui, sans-serif;
-    font-size: 7.5px;
-    font-weight: 500;
-    letter-spacing: 0.03em;
+    font-size: 10px;
+    font-weight: 700;
+    color: #fafafa;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+    letter-spacing: 0.02em;
     pointer-events: none;
-    transition: opacity 0.3s ease;
+    user-select: none;
   }
 
-  .region-mcap.visible {
-    opacity: 0.45 !important;
-  }
-
-  .region-lore {
-    font-family: 'Cinzel', 'Georgia', serif;
-    font-size: 7px;
-    font-weight: 400;
-    font-style: italic;
-    letter-spacing: 0.04em;
+  :global(.marker-label) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
     pointer-events: none;
-    transition: opacity 0.3s ease;
+    user-select: none;
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
   }
 
-  .region-lore.visible {
-    opacity: 0.4 !important;
-  }
-
-  .map-title {
+  :global(.marker-name) {
     font-family: 'Cinzel', 'Georgia', serif;
-    font-size: 14px;
-    font-weight: 500;
-    letter-spacing: 0.22em;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8), 0 0 8px rgba(0, 0, 0, 0.6);
+    white-space: nowrap;
     text-transform: uppercase;
   }
 
-  .crest-text {
+  :global(.marker-tier) {
     font-family: 'Cinzel', 'Georgia', serif;
     font-size: 8px;
     font-weight: 400;
-    letter-spacing: 0.35em;
+    letter-spacing: 0.1em;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8), 0 0 8px rgba(0, 0, 0, 0.6);
+    white-space: nowrap;
+    opacity: 0.6;
     text-transform: uppercase;
   }
 
-  .kingdom-crest {
+  :global(.map-marker-wrap:hover .marker-label) {
+    opacity: 1;
+  }
+
+  /* ═══ REGION PREVIEW CARD ═══ */
+
+  .preview-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+  }
+
+  .region-preview-card {
+    position: absolute;
+    z-index: 10;
+    width: 280px;
+    padding: 16px;
+    backdrop-filter: blur(28px) saturate(1.6);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0.03) 40%,
+      rgba(0, 0, 0, 0.06) 100%
+    );
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-top-color: rgba(255, 255, 255, 0.22);
+    border-left-color: rgba(255, 255, 255, 0.16);
+    border-bottom-color: rgba(255, 255, 255, 0.05);
+    border-right-color: rgba(255, 255, 255, 0.06);
+    border-radius: 18px;
+    box-shadow:
+      0 8px 40px rgba(0, 0, 0, 0.30),
+      0 2px 12px rgba(0, 0, 0, 0.15),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      inset 0 0 24px rgba(255, 255, 255, 0.02);
+    animation: cardReveal 0.15s ease-out forwards;
+    pointer-events: auto;
+  }
+
+  .region-preview-card.legendary {
+    border-color: rgba(255, 215, 0, 0.15);
+    border-top-color: rgba(255, 215, 0, 0.30);
+    box-shadow:
+      0 8px 40px rgba(0, 0, 0, 0.30),
+      0 0 24px rgba(255, 215, 0, 0.06),
+      inset 0 1px 0 rgba(255, 215, 0, 0.15),
+      inset 0 0 24px rgba(255, 215, 0, 0.02);
+  }
+
+  @keyframes cardReveal {
+    from { opacity: 0; transform: scale(0.95) translateY(4px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .preview-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .preview-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  }
+
+  .preview-title-group {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .preview-castle-name {
+    font-family: 'Cinzel', 'Georgia', serif;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .preview-district {
+    font-family: 'Cinzel', 'Georgia', serif;
+    font-size: 10px;
+    font-weight: 400;
+    color: #9494a3;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    display: block;
+    margin-top: 3px;
+  }
+
+  .preview-token-sym {
+    color: #78788a;
+    font-size: 11px;
+    font-weight: 400;
+  }
+
+  .preview-close {
+    background: none;
+    border: none;
+    color: #9494a3;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 2px 6px;
+    line-height: 1;
+    border-radius: 6px;
+    transition: color 0.15s ease, background 0.15s ease;
+    flex-shrink: 0;
+  }
+  .preview-close:hover {
+    color: #d0d0da;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .preview-divider {
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.10) 30%,
+      rgba(255, 255, 255, 0.10) 70%,
+      transparent 100%
+    );
+    margin: 10px 0;
+  }
+
+  .preview-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .preview-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .preview-label {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 11px;
+    color: #9494a3;
+  }
+
+  .preview-value {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    color: #e4e4e7;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .preview-lore {
+    font-family: 'Cinzel', 'Georgia', serif;
+    font-size: 10px;
+    font-style: italic;
+    color: #8888a0;
+    text-align: center;
+    letter-spacing: 0.03em;
+    margin-top: 8px;
+  }
+
+  .preview-view-btn {
+    width: 100%;
+    margin-top: 12px;
+    padding: 10px 16px;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fafafa;
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.10) 0%,
+      rgba(255, 255, 255, 0.04) 100%
+    );
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-top-color: rgba(255, 255, 255, 0.20);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    letter-spacing: 0.02em;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+  .preview-view-btn:hover {
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.16) 0%,
+      rgba(255, 255, 255, 0.06) 100%
+    );
+    border-color: rgba(255, 255, 255, 0.22);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+
+  /* ═══ ENVIRONMENT STRIP ═══ */
+
+  .env-strip {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 4;
     pointer-events: none;
   }
 
-  /* Legendary pulse animation */
-  .legendary-stroke {
-    animation: legendaryPulse 3s ease-in-out infinite;
+  .env-line {
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.06) 20%,
+      rgba(255, 255, 255, 0.1) 50%,
+      rgba(255, 255, 255, 0.06) 80%,
+      transparent 100%
+    );
   }
 
-  .legendary-stroke-outer {
-    animation: legendaryPulseOuter 4s ease-in-out infinite;
+  .env-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: linear-gradient(180deg, rgba(10, 10, 14, 0.0) 0%, rgba(10, 10, 14, 0.7) 100%);
   }
 
-  @keyframes legendaryPulse {
-    0%, 100% { stroke-opacity: 0.5; }
-    50% { stroke-opacity: 0.9; }
+  .env-brand {
+    font-family: 'Cinzel', 'Georgia', serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    color: rgba(255, 255, 255, 0.25);
+    text-transform: uppercase;
   }
 
-  @keyframes legendaryPulseOuter {
-    0%, 100% { stroke-opacity: 0.3; stroke-width: 3; }
-    50% { stroke-opacity: 0.6; stroke-width: 4; }
+  .env-separator {
+    color: rgba(255, 255, 255, 0.12);
+    font-size: 10px;
   }
 
-  .region.legendary .region-name {
-    fill: #ffd700;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
+  .env-tagline {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 10px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.18);
+    letter-spacing: 0.04em;
   }
 
-  .region.legendary .region-district {
-    fill: #e8d080;
+  /* Mobile: card at bottom center */
+  @media (max-width: 640px) {
+    .region-preview-card {
+      width: 85vw;
+      left: 50% !important;
+      top: auto !important;
+      bottom: 20px;
+      transform: translateX(-50%);
+    }
   }
 
-  .region.legendary .region-mcap {
-    fill: #d4b860;
-  }
-
-  .label-backing {
-    transition: fill-opacity 0.3s ease;
-  }
-
-  /* ── Hover-driven focus system ── */
-
-  /* Terrain and decorations dim when hovering a region */
-  .terrain-group {
-    transition: opacity 0.4s ease;
-  }
-  .terrain-group.terrain-dimmed {
-    opacity: 0.5;
-  }
-
-  /* Dimmed state for non-hovered regions */
-  .region.dimmed {
-    opacity: 0.35;
-    transition: opacity 0.4s ease, transform 0.2s ease;
-  }
-
-  /* Hovered region: elevated feel — full opacity */
-  .region.hovered {
-    opacity: 1;
-    transition: opacity 0.3s ease, transform 0.2s ease;
-  }
-
-  /* Hovered text: higher contrast */
-  .region.hovered .region-name {
-    font-size: 11px;
-    font-weight: 600;
-  }
-
-  /* Road transitions */
-  .region-road {
-    transition: stroke-opacity 0.4s ease, stroke-width 0.3s ease;
-  }
-
-  .region-road.road-glowing {
-    stroke-opacity: 0.45;
-    stroke-width: 1.8;
-    stroke: #7a6a52;
-  }
-
-  .region-road.road-dimmed {
-    stroke-opacity: 0.12;
-  }
-
-  .road-glow-overlay {
-    transition: stroke-opacity 0.3s ease;
-  }
-
-  /* Global roads dim when focusing on a region */
-  .roads {
-    transition: opacity 0.4s ease;
-  }
-
-  .roads.roads-dimmed {
-    opacity: 0.4;
+  /* Hide MapLibre default UI for cleaner look */
+  :global(.maplibregl-ctrl-bottom-left),
+  :global(.maplibregl-ctrl-bottom-right),
+  :global(.maplibregl-ctrl-top-left),
+  :global(.maplibregl-ctrl-top-right) {
+    display: none !important;
   }
 </style>

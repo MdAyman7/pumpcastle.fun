@@ -111,3 +111,8 @@ export function phaseLabel(phase: LifePhase): string {
   };
   return labels[phase] ?? phase;
 }
+
+/** Tier display name (capitalize first letter) */
+export function tierDisplayName(tier: string): string {
+  return tier.charAt(0).toUpperCase() + tier.slice(1);
+}

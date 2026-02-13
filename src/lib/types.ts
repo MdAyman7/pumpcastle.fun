@@ -324,6 +324,8 @@ export interface MapRegion {
   constructionProgress: number;
   /** Computed importance score 0–1 (drives placement and size) */
   importance: number;
+  /** Token logo/image URL (optional) */
+  imageUrl?: string;
 }
 
 // Performance budget — per-castle object and effect limits

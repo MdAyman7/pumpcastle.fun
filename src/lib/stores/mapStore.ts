@@ -32,8 +32,6 @@ export const trackedAddresses = writable<string[]>([...DEFAULT_ADDRESSES]);
 export const allTokens = writable<Map<string, TokenEntry>>(new Map());
 export const mapLoading = writable<boolean>(false);
 
-let mapPollingInterval: ReturnType<typeof setInterval> | null = null;
-
 /**
  * Fetch tokens via the batch endpoint.
  * Falls back to individual fetches if the batch fails.
@@ -94,28 +92,6 @@ export async function loadAllTokens(): Promise<void> {
   }
 }
 
-/** Start polling all tokens (slower rate than single-token) */
-export function startMapPolling(intervalMs: number = 30000): void {
-  stopMapPolling();
-  mapPollingInterval = setInterval(async () => {
-    try {
-      let currentAddresses: string[] = [];
-      trackedAddresses.subscribe(v => { currentAddresses = v; })();
-
-      const entries = await batchFetchTokens(currentAddresses);
-      allTokens.set(entries);
-    } catch {
-      // Swallow polling errors silently
-    }
-  }, intervalMs);
-}
-
-export function stopMapPolling(): void {
-  if (mapPollingInterval !== null) {
-    clearInterval(mapPollingInterval);
-    mapPollingInterval = null;
-  }
-}
 
 /**
  * Add a new token address to the map.
@@ -180,6 +156,7 @@ export const mapRegions: Readable<MapRegion[]> = derived(
         decay: entry.state.decay,
         constructionProgress: entry.state.constructionProgress,
         importance: computeImportance(entry.state),
+        imageUrl: entry.token.imageUrl,
       });
     }
     return regions;

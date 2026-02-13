@@ -315,10 +315,11 @@ export class WorldRenderer3D {
     const sunZ = Math.cos(sunAngle) * sunDist * 0.6;
     this.sunLight.position.set(10, Math.max(1, sunY), sunZ);
 
-    // Sun intensity — bright and dominant at noon, warm glow during evening, soft fill at night
-    // Night: 0.65 (cinematic — clearly readable terrain, not pitch black)
-    // Noon: 2.5 (vibrant — ACES tonemapping compresses gracefully)
-    const baseSunIntensity = 0.65 + daylight * 1.85;
+    // Sun intensity — darker, richer tones during day for saturated colors;
+    // brighter fill at night so the castle glows beautifully.
+    // Night: 0.75 (lifted for better castle visibility)
+    // Noon: 1.55 (lower = deeper shadows, richer material saturation)
+    const baseSunIntensity = 0.75 + daylight * 0.80;
     this.sunLight.intensity = baseSunIntensity;
 
     // Sun color shifts: warm golden during evening, cool-warm at night, white midday
@@ -343,42 +344,42 @@ export class WorldRenderer3D {
       this.sunLight.color.lerp(new THREE.Color(0xFFB060), eveningFactor * 0.35);
     }
 
-    // Moon light — cool blue-silver fill for clearly readable nights
-    // Wide and high for maximum terrain coverage. Intensity scaled to
-    // ensure distant hills catch enough light to remain visible.
-    this.moonLight.color.setHex(0x8098cc);
-    this.moonLight.intensity = nightFactor * 1.0;
+    // Moon light — brighter cool blue-silver fill so castles glow at night.
+    // Wide and high for maximum terrain coverage.
+    this.moonLight.color.setHex(0x90a8d8);
+    this.moonLight.intensity = nightFactor * 1.4;
     // Very high position + wide offset = broad moonlight wash across whole scene
     this.moonLight.position.set(-15, 28, -6);
 
-    // Ambient — lifts shadows without flattening. Higher during day.
-    // 0.60 at night → 0.90 at noon (strong night ambient = no black terrain)
-    this.ambientLight.intensity = 0.60 + daylight * 0.30;
+    // Ambient — lower during day for deeper shadows + richer colors,
+    // lifted at night so castle details remain visible and beautiful.
+    // Night: 0.60 (brighter for ethereal glow) → Noon: 0.45 (darker for drama)
+    this.ambientLight.intensity = 0.60 - daylight * 0.15;
 
-    // Ambient color: cool blue at night (cinematic), warm-neutral during day
+    // Ambient color: soft lavender-blue at night (ethereal), warm-neutral during day
     if (eveningFactor > 0) {
       this.ambientLight.color.setHex(0x708090).lerp(
         new THREE.Color(0x907060), eveningFactor * 0.4
       );
     } else if (nightFactor > 0.5) {
-      // Night: cool blue ambient — everything gets soft blue fill
-      // This is the key to readable nights: strong cool-toned ambient
+      // Night: soft lavender-blue ambient — ethereal, slightly lighter fill
       const nightBlueness = (nightFactor - 0.5) / 0.5;
       this.ambientLight.color.setHex(0x708090).lerp(
-        new THREE.Color(0x6878a8), nightBlueness * 0.5
+        new THREE.Color(0x7888b8), nightBlueness * 0.6
       );
     } else if (daylight > 0.5) {
-      // Clear daytime: warm sky-bounce ambient (not cold blue-grey)
-      this.ambientLight.color.setHex(0x708090).lerp(
-        new THREE.Color(0x95907a), (daylight - 0.5) / 0.5 * 0.4
+      // Clear daytime: deeper warm-earth ambient for richer castle tones
+      this.ambientLight.color.setHex(0x605848).lerp(
+        new THREE.Color(0x706858), (daylight - 0.5) / 0.5 * 0.4
       );
     } else {
       this.ambientLight.color.setHex(0x708090);
     }
 
     // Hemi sky color — richer transitions
-    const dayColor = new THREE.Color(0x87ceeb);
-    const nightColor = new THREE.Color(0x384868); // moonlit blue (sky contributes real light)
+    // Day: deeper blue for saturated look; Night: brighter moonlit blue for castle visibility
+    const dayColor = new THREE.Color(0x6aaedc);   // deeper sky-blue (richer saturation)
+    const nightColor = new THREE.Color(0x405878);  // brighter moonlit blue (castle glow)
     const sunriseColor = new THREE.Color(0xffa070);
     const eveningColor = new THREE.Color(0xE8A060); // warm golden sky
     let skyColor: THREE.Color;
@@ -399,79 +400,78 @@ export class WorldRenderer3D {
     }
     this.hemiLight.color.copy(skyColor);
 
-    // Hemi intensity scales with daylight — strong sky bounce at all times.
-    // The hemisphere light IS the sky illumination on terrain — at night, the
-    // sky color (blue) paints everything with cool ambient light. This is the
-    // single most important light for preventing black terrain at night.
-    // 0.50 at night → 0.90 at noon
-    this.hemiLight.intensity = 0.50 + daylight * 0.40;
+    // Hemi intensity: stronger at night for beautiful visibility, lower during
+    // day for deeper, richer shadows that let castle colors saturate.
+    // Night: 0.58 (lifted — sky bounce lights castle softly)
+    // Noon: 0.50 (lower — deeper dramatic shadows)
+    this.hemiLight.intensity = 0.58 - daylight * 0.08;
 
-    // Hemi ground color — at night, ground bounce is cool blue-grey (moonlit earth).
-    // Brighter ground color = upward fill that lifts undersides of hills/trees.
-    const dayGround = new THREE.Color(0x5a7a50); // brighter green ground bounce
-    const nightGround = new THREE.Color(0x304858); // cool blue-grey (visible uplight)
+    // Hemi ground color — darker earth bounce at day for depth, brighter at night
+    const dayGround = new THREE.Color(0x4a6840);  // deeper earth (richer shadows)
+    const nightGround = new THREE.Color(0x385060); // brighter cool uplight at night
     this.hemiLight.groundColor.copy(dayGround).lerp(nightGround, nightFactor);
 
-    // Target exposure — bright and clear during day, readable at night
-    // Day peak: 1.75 (vibrant — ACES tonemapping compresses highlights gracefully)
-    // Night floor: 0.95 (cinematic — ACES needs high input to stay readable)
-    this.targetExposure = 0.95 + daylight * 0.80 + eveningFactor * 0.08;
+    // Target exposure — DARKER during day for deep saturated colors (screenshot-worthy),
+    // BRIGHTER at night so castle details and glow are beautiful and visible.
+    // Day: 0.88 (low = rich, saturated, dramatic — colors pop)
+    // Night: 1.10 (lifted = castle shines ethereally against the dark)
+    this.targetExposure = 1.10 - daylight * 0.22 + eveningFactor * 0.10;
 
     // ── Castle-focused lights ──────────────────────────────────
-    // The castle is the visual anchor. At night it should GLOW like
-    // a landmark — warm key light creates the "inhabited" feeling,
-    // strong rim light ensures the silhouette pops against the sky.
+    // The castle is the hero. During the day, moderate key light lets
+    // deeper global shadows create rich, saturated material colors.
+    // At night, the castle GLOWS — strong warm key light + bright rim
+    // make it look magical and screenshot-worthy.
     //
     // Key light: warm spotlight aimed at castle center.
-    // Day: 0.95 warm-white (castle pops against grass)
-    // Night: 0.60 warm amber (castle is brightest thing in scene)
+    // Day: 0.70 (moderate — let shadows create depth and color richness)
+    // Night: 0.95 (strong warm glow — castle is a beacon)
     // Evening: warm golden boost
-    const castleKeyBase = 0.60 + daylight * 0.35;
-    this.castleKeyLight.intensity = castleKeyBase + eveningFactor * 0.15;
+    const castleKeyBase = 0.95 - daylight * 0.25;
+    this.castleKeyLight.intensity = castleKeyBase + eveningFactor * 0.20;
 
     // Key light color: warm white during day, rich warm amber at night.
     // The night color is deliberately warm — contrasts with cool moonlight
     // on the surrounding terrain, making the castle the obvious focal point.
     if (daylight > 0.4) {
-      this.castleKeyLight.color.setHex(0xfff8ee); // warm white
+      this.castleKeyLight.color.setHex(0xfff0dd); // slightly warmer white
     } else if (eveningFactor > 0) {
-      this.castleKeyLight.color.setHex(0xfff8ee).lerp(
-        new THREE.Color(0xffc870), eveningFactor * 0.3
+      this.castleKeyLight.color.setHex(0xfff0dd).lerp(
+        new THREE.Color(0xffc060), eveningFactor * 0.35
       );
     } else {
       // Night: rich warm amber — castle glows warmly against cool blues
-      this.castleKeyLight.color.setHex(0xffd890).lerp(
-        new THREE.Color(0xfff8ee), daylight * 3
+      this.castleKeyLight.color.setHex(0xffe0a0).lerp(
+        new THREE.Color(0xfff0dd), daylight * 3
       );
     }
 
     // Rim light: creates edge separation so castle silhouette is clear.
-    // AT NIGHT: the rim light is STRONGER than during the day.
-    // The moonlit edge highlight makes the castle pop against the night sky.
-    // This is the subtle "magic outline" that makes the castle look special.
+    // At night: MUCH stronger — the moonlit halo makes the castle magical.
+    // During day: subtle — deep shadows already define the form.
     //
-    // Day: 0.40 (clear edge definition against green terrain)
-    // Night: 0.50 (strong moonlit rim — castle silhouette always pops)
+    // Day: 0.35 (subtle — shadows do the work)
+    // Night: 0.75 (strong moonlit rim — castle looks ethereal)
     // Evening: warmer, golden edge glow
-    const rimBase = 0.50 - daylight * 0.10; // INVERTED: stronger at night!
-    this.castleRimLight.intensity = rimBase + eveningFactor * 0.10;
+    const rimBase = 0.75 - daylight * 0.40;
+    this.castleRimLight.intensity = rimBase + eveningFactor * 0.12;
 
     if (daylight > 0.4) {
-      // Daytime: cool sky-bounce backlight (lifts edges without yellowing)
-      this.castleRimLight.color.setHex(0xc0d8f0);
+      // Daytime: muted cool backlight (doesn't compete with shadow depth)
+      this.castleRimLight.color.setHex(0xb0c8e0);
     } else if (eveningFactor > 0) {
       // Evening: warm golden edge
-      this.castleRimLight.color.setHex(0xc0d8f0).lerp(
+      this.castleRimLight.color.setHex(0xb0c8e0).lerp(
         new THREE.Color(0xf0c888), eveningFactor * 0.4
       );
     } else if (nightFactor > 0.3) {
-      // Night: bright cool-silver with subtle blue — moonlit magic outline
+      // Night: bright silvery-blue — moonlit halo around castle edges
       const nightEdge = (nightFactor - 0.3) / 0.7;
-      this.castleRimLight.color.setHex(0xa0b8d8).lerp(
-        new THREE.Color(0xb0c8e8), nightEdge * 0.5
+      this.castleRimLight.color.setHex(0xa8c0e0).lerp(
+        new THREE.Color(0xc0d8f8), nightEdge * 0.6
       );
     } else {
-      this.castleRimLight.color.setHex(0xc0d8f0);
+      this.castleRimLight.color.setHex(0xb0c8e0);
     }
   }
 
@@ -743,32 +743,31 @@ export class WorldRenderer3D {
     let below: THREE.Color;
 
     if (daylight < 0.10) {
-      // Night: soft deep blues (cinematic — never pure black)
-      // Brighter than realistic so terrain/trees read as silhouettes
-      zenith = new THREE.Color(0x101830);
-      mid = new THREE.Color(0x182440);
-      horizon = new THREE.Color(0x283850);
-      below = new THREE.Color(0x141e35);
+      // Night: slightly brighter deep blues — castle glows against this backdrop
+      zenith = new THREE.Color(0x141e38);
+      mid = new THREE.Color(0x1c2a48);
+      horizon = new THREE.Color(0x2c3e58);
+      below = new THREE.Color(0x182438);
     } else if (daylight < 0.25) {
-      // Dawn/dusk transition — starting colors match night sky dome values
+      // Dawn/dusk transition
       const t = (daylight - 0.10) / 0.15;
-      zenith = new THREE.Color(0x101830).lerp(new THREE.Color(0x2a4a7a), t);
-      mid = new THREE.Color(0x182440).lerp(new THREE.Color(0xd08858), t);
-      horizon = new THREE.Color(0x283850).lerp(new THREE.Color(0xf0a868), t);
-      below = new THREE.Color(0x141e35).lerp(new THREE.Color(0xc89060), t);
+      zenith = new THREE.Color(0x141e38).lerp(new THREE.Color(0x2a4a7a), t);
+      mid = new THREE.Color(0x1c2a48).lerp(new THREE.Color(0xd08858), t);
+      horizon = new THREE.Color(0x2c3e58).lerp(new THREE.Color(0xf0a868), t);
+      below = new THREE.Color(0x182438).lerp(new THREE.Color(0xc89060), t);
     } else if (daylight < 0.45) {
       // Sunrise/sunset → day transition
       const t = (daylight - 0.25) / 0.20;
-      zenith = new THREE.Color(0x2a4a7a).lerp(new THREE.Color(0x5a9ad7), t);
-      mid = new THREE.Color(0xd08858).lerp(new THREE.Color(0x87ceeb), t);
-      horizon = new THREE.Color(0xf0a868).lerp(new THREE.Color(0xc8dce8), t);
-      below = new THREE.Color(0xc89060).lerp(new THREE.Color(0x90a8b8), t);
+      zenith = new THREE.Color(0x2a4a7a).lerp(new THREE.Color(0x4080c0), t);
+      mid = new THREE.Color(0xd08858).lerp(new THREE.Color(0x6aaedc), t);
+      horizon = new THREE.Color(0xf0a868).lerp(new THREE.Color(0xb0c8d8), t);
+      below = new THREE.Color(0xc89060).lerp(new THREE.Color(0x8098a8), t);
     } else {
-      // Full day
-      zenith = new THREE.Color(0x5a9ad7);
-      mid = new THREE.Color(0x87ceeb);
-      horizon = new THREE.Color(0xc8dce8);
-      below = new THREE.Color(0x90a8b8);
+      // Full day: deeper, richer sky — more dramatic backdrop for castles
+      zenith = new THREE.Color(0x4080c0);   // deeper blue zenith
+      mid = new THREE.Color(0x6aaedc);       // richer mid-sky
+      horizon = new THREE.Color(0xb0c8d8);   // slightly muted horizon
+      below = new THREE.Color(0x8098a8);     // earthier
     }
 
     // Evening golden hour warm tint
@@ -971,17 +970,29 @@ export class WorldRenderer3D {
 
   // ─── Camera target (state-driven) ─────────────────────────
 
+  /** Responsive zoom-out factor: pull camera back on narrow/mobile screens */
+  private getResponsiveDistanceScale(): number {
+    const aspect = this.width / this.height;
+    if (aspect < 0.7)  return 1.45;  // Tall portrait phones
+    if (aspect < 0.85) return 1.35;  // Standard portrait
+    if (aspect < 1.0)  return 1.2;   // Near-square / landscape phones
+    if (aspect < 1.3)  return 1.1;   // Small tablets / narrow desktop
+    return 1.0;                       // Desktop
+  }
+
   private updateCameraTarget(): void {
     if (!this.worldState) return;
 
+    const s = this.getResponsiveDistanceScale();
+
     if (this.worldState.phase === 'construction') {
-      this.baseCameraPosition.set(10, 10, 24);
+      this.baseCameraPosition.set(10 * s, 10 * s, 24 * s);
       this.baseLookAt.set(0, 1, 0);
     } else if (this.worldState.showGraduationCelebration) {
-      this.baseCameraPosition.set(0, 18, 35);
+      this.baseCameraPosition.set(0, 18 * s, 35 * s);
       this.baseLookAt.set(0, 3, 0);
     } else if (this.worldState.isLegendary) {
-      this.baseCameraPosition.set(0, 20, 45);
+      this.baseCameraPosition.set(0, 20 * s, 45 * s);
       this.baseLookAt.set(0, 3, 0);
     } else {
       const tierDistance: Record<string, number> = {
@@ -989,8 +1000,8 @@ export class WorldRenderer3D {
         'manor': 30, 'castle': 32, 'stronghold': 35, 'fortress': 38,
         'palace': 40, 'citadel': 44, 'empire': 48, 'legend': 52
       };
-      const dist = tierDistance[this.worldState.tier] || 32;
-      this.baseCameraPosition.set(dist * 0.35, 12, dist);
+      const dist = (tierDistance[this.worldState.tier] || 32) * s;
+      this.baseCameraPosition.set(dist * 0.35, 12 * s, dist);
       this.baseLookAt.set(0, 2, 0);
     }
 
@@ -1232,9 +1243,9 @@ export class WorldRenderer3D {
     const nightFactor = 1 - daylight;
     const eveningFactor = this.getEveningFactor();
 
-    // Base sky from day/night — richer palette
-    const daySky = new THREE.Color(0x87ceeb);
-    const nightSky = new THREE.Color(0x182440);   // brighter navy, readable not black
+    // Base sky from day/night — deeper day, brighter night
+    const daySky = new THREE.Color(0x6aaedc);      // deeper blue fog (richer scene)
+    const nightSky = new THREE.Color(0x1c2a48);    // slightly brighter navy
     const sunriseSky = new THREE.Color(0xffa070);
     const eveningSky = new THREE.Color(0xD08050);  // warm amber sky during golden hour
 
@@ -1271,34 +1282,32 @@ export class WorldRenderer3D {
       this.targetAmbientIntensity = 0.65;
     } else {
       this.targetFogColor.copy(baseSky);
-      // Clear day: fog pushed well back for open, airy feel
-      // Night: fog still pushed back enough to see terrain and hills clearly.
-      // Night floor: near=55, far=110 (not too close — hills should be visible)
-      // Day peak: near=90, far=210 (open, airy, vibrant)
-      this.targetFogNear = 55 + daylight * 35;
-      this.targetFogFar = 110 + daylight * 100;
-      // Match updateDayNightCycle values
-      this.targetSunIntensity = 0.45 + daylight * 1.55;
-      this.targetAmbientIntensity = 0.40 + daylight * 0.50;
+      // Day: fog moderate — not too far, creates depth and richness
+      // Night: fog pushed back generously — castle silhouette pops against sky
+      // Night floor: near=60, far=130 (generous — hills visible, castle clear)
+      // Day peak: near=70, far=160 (moderate — creates atmospheric depth)
+      this.targetFogNear = 60 + daylight * 10;
+      this.targetFogFar = 130 + daylight * 30;
+      // Darker sun at day for deeper shadows, stronger at night for castle glow
+      this.targetSunIntensity = 0.70 + daylight * 0.85;
+      this.targetAmbientIntensity = 0.55 - daylight * 0.15;
     }
 
     // ── Night atmosphere enhancement — atmospheric light scattering ──
-    // Moonlight scatters through the atmosphere, creating a soft blue haze
-    // that lifts distant terrain out of darkness. This is the key to making
-    // nights feel deep but not invisible. The fog color should be bright
-    // enough that hills fade into visible blue haze, not black void.
+    // Moonlight scatters through the atmosphere, creating a soft blue haze.
+    // The castle should feel like it's glowing against a beautiful dark sky.
+    // Brighter fog and generous pushback = castle reads as a luminous beacon.
     if (nightFactor > 0.3) {
       const nightStrength = (nightFactor - 0.3) / 0.7; // 0–1 in night range
-      // Moonlit atmospheric haze: bright cool blue (NOT dark navy)
-      // This is what makes distant hills readable — they fade into blue, not black
-      this.targetFogColor.lerp(new THREE.Color(0x2a3a58), nightStrength * 0.40);
-      // Push fog back generously — night terrain should be VISIBLE
-      this.targetFogNear += nightStrength * 15;
-      this.targetFogFar += nightStrength * 35;
-      // Strong ambient boost: sky illumination fills shadows with cool light
-      this.targetAmbientIntensity += nightStrength * 0.18;
-      // Slight exposure lift for atmospheric scattering brightness
-      this.targetExposure += nightStrength * 0.05;
+      // Moonlit atmospheric haze: brighter blue (castle glows against this)
+      this.targetFogColor.lerp(new THREE.Color(0x303e5a), nightStrength * 0.45);
+      // Push fog back — castle silhouette and surroundings stay clear
+      this.targetFogNear += nightStrength * 20;
+      this.targetFogFar += nightStrength * 45;
+      // Ambient boost: fills castle shadows with soft cool light
+      this.targetAmbientIntensity += nightStrength * 0.22;
+      // Exposure lift: castle materials catch more light, glow effect
+      this.targetExposure += nightStrength * 0.10;
     }
 
     // ── Evening golden hour enhancement ─────────────────────────
@@ -1329,15 +1338,15 @@ export class WorldRenderer3D {
       if (nightFactor > 0.3) {
         const legendaryNight = (nightFactor - 0.3) / 0.7;
         // Push fog even further back — legendary silhouette is always clear
-        this.targetFogNear += legendaryNight * 8;
-        this.targetFogFar += legendaryNight * 20;
-        // Warm golden night fog tint — the castle's glow colors the air
-        this.targetFogColor.lerp(new THREE.Color(0x1A1828), legendaryNight * 0.15);
-        this.targetFogColor.lerp(new THREE.Color(0x2A2040), legendaryNight * 0.08);
-        // Boost ambient for readability — legendary never goes truly dark
-        this.targetAmbientIntensity += legendaryNight * 0.12;
-        // Warmer exposure at night — the castle's inner light compensates
-        this.targetExposure += legendaryNight * 0.10;
+        this.targetFogNear += legendaryNight * 12;
+        this.targetFogFar += legendaryNight * 30;
+        // Subtle warm purple tint to night fog — legendary castle colors the air
+        this.targetFogColor.lerp(new THREE.Color(0x201830), legendaryNight * 0.12);
+        this.targetFogColor.lerp(new THREE.Color(0x282048), legendaryNight * 0.06);
+        // Ambient boost — legendary glows beautifully at night
+        this.targetAmbientIntensity += legendaryNight * 0.15;
+        // Exposure lift — inner castle light makes it radiant
+        this.targetExposure += legendaryNight * 0.12;
       }
     }
 
@@ -1485,8 +1494,25 @@ export class WorldRenderer3D {
     this.width = width;
     this.height = height;
     this.camera.aspect = width / height;
+
+    // Responsive FOV: widen on narrow/portrait screens so more of the scene is visible
+    const aspect = width / height;
+    if (aspect < 0.85) {
+      // Portrait mobile: significantly wider FOV
+      this.camera.fov = 68;
+    } else if (aspect < 1.2) {
+      // Small/narrow screens: moderately wider
+      this.camera.fov = 62;
+    } else {
+      // Desktop: default
+      this.camera.fov = 55;
+    }
+
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+
+    // Re-apply camera distance for new screen size
+    this.updateCameraTarget();
   }
 
   /** True once the scene has had enough frames to build geometry and settle camera. */

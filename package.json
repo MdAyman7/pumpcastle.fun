@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@codex-data/sdk": "^2.0.1",
+    "@tabler/icons-svelte": "^3.36.1",
+    "maplibre-gl": "^5.18.0",
     "three": "^0.169.0"
   },
   "devDependencies": {
