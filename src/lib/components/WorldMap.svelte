@@ -996,20 +996,42 @@
     100% { background-position: -200% center; }
   }
 
-  /* Mobile */
+  /* Mobile: bottom-sheet style */
   @media (max-width: 640px) {
     .region-preview-card {
-      width: 85vw;
+      width: calc(100vw - 16px);
+      max-width: 360px;
       left: 50% !important;
       top: auto !important;
-      bottom: 20px;
+      bottom: 0;
       transform: translateX(-50%);
+      border-radius: 18px 18px 0 0;
+      padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0px)) 16px;
+      animation: mobileSlideUp 0.25s ease-out forwards;
     }
 
+    @keyframes mobileSlideUp {
+      from { opacity: 0; transform: translateX(-50%) translateY(40px); }
+      to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+
+    .preview-header { gap: 8px; }
+    .preview-avatar { width: 30px; height: 30px; }
+    .preview-castle-name { font-size: 13px; }
+    .preview-view-btn { padding: 10px 14px; font-size: 12px; }
+
     .launchpad-island {
-      bottom: 48px;
+      bottom: 44px;
       right: 8px;
     }
+
+    .lp-collapsed { padding: 6px 10px; gap: 6px; }
+    .lp-icon { font-size: 16px; }
+    .lp-label { font-size: 8px; }
+    .lp-expanded { padding: 10px 12px; width: 180px; }
+    .lp-exp-title { font-size: 10px; }
+    .lp-exp-features li { font-size: 9px; }
+    .lp-coming-soon { font-size: 9px; margin-top: 8px; }
   }
 
   /* Hide MapLibre default UI for cleaner look */

@@ -119,13 +119,13 @@
 <style>
   .joystick-container {
     position: fixed;
-    bottom: 32px;
-    left: 24px;
+    bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+    left: calc(16px + env(safe-area-inset-left, 0px));
     z-index: 50;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     pointer-events: auto;
     -webkit-user-select: none;
     user-select: none;
@@ -133,8 +133,8 @@
   }
 
   .joystick-outer {
-    width: 112px;
-    height: 112px;
+    width: 100px;
+    height: 100px;
     border-radius: 50%;
     background: rgba(0, 0, 0, 0.25);
     backdrop-filter: blur(12px);
@@ -152,8 +152,8 @@
   }
 
   .joystick-knob {
-    width: 44px;
-    height: 44px;
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
     background: radial-gradient(
       circle at 40% 35%,
@@ -174,9 +174,9 @@
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 20px;
     color: rgba(255, 255, 255, 0.7);
-    font-size: 0.65rem;
+    font-size: 0.62rem;
     font-family: 'Cinzel', serif;
-    padding: 6px 16px;
+    padding: 5px 14px;
     letter-spacing: 0.06em;
     touch-action: none;
   }
@@ -184,5 +184,17 @@
   .sprint-btn:active {
     background: rgba(255, 255, 255, 0.15);
     color: #fff;
+  }
+
+  /* Small phones: even more compact */
+  @media (max-width: 380px) {
+    .joystick-outer {
+      width: 84px;
+      height: 84px;
+    }
+    .joystick-knob {
+      width: 34px;
+      height: 34px;
+    }
   }
 </style>

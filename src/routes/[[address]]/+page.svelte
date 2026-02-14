@@ -719,7 +719,7 @@
 
 <!-- Bottom-left: state badges (castle view only) -->
 {#if viewMode === 'castle' && $worldState}
-  <div class="status-strip">
+  <div class="status-strip" class:roaming={isRoaming}>
     <div class="phase-pill" style="--phase-color: {getPhaseColor($worldState)}">
       {getPhaseName($worldState)}
     </div>
@@ -734,7 +734,7 @@
 
 <!-- Bottom-right: quick stats + drawer toggle (castle view only) -->
 {#if viewMode === 'castle' && $tokenData && $worldState}
-  <div class="stats-bar">
+  <div class="stats-bar" class:roaming={isRoaming}>
     <div class="stat">
       <span class="stat-val">${formatNumber($tokenData.marketCap)}</span>
       <span class="stat-lbl">MCap</span>
@@ -922,6 +922,7 @@
 <!-- Sound toggle (always visible, minimal) -->
 <button
   class="sound-toggle"
+  class:roaming={isRoaming}
   on:click={toggleSound}
   title={soundEnabled ? 'Sound: On' : 'Sound: Off'}
   aria-label={soundEnabled ? 'Mute sound' : 'Unmute sound'}
@@ -941,6 +942,7 @@
 <!-- Music toggle (always visible, minimal, next to sound toggle) -->
 <button
   class="music-toggle"
+  class:roaming={isRoaming}
   on:click={toggleMusic}
   title={musicEnabled ? 'Music: On' : 'Music: Off'}
   aria-label={musicEnabled ? 'Stop music' : 'Play music'}
@@ -2075,27 +2077,61 @@
 
   /* ---- Mobile ---- */
   @media (max-width: 640px) {
+    /* Top bar: tighter spacing, safe-area aware */
     .top-bar {
-      top: 8px;
+      top: env(safe-area-inset-top, 8px);
       left: 8px;
       right: 8px;
       padding: 6px 10px;
+      border-radius: 14px;
     }
-    /* Castle view: stack status + stats vertically to avoid overlap */
-    .status-strip {
-      bottom: 44px;
+
+    /* Token identity: sits below top bar, full width, compact */
+    .token-identity {
+      top: calc(env(safe-area-inset-top, 8px) + 48px);
       left: 8px;
+      right: auto;
+      max-width: 60%;
+      padding: 5px 10px;
+      gap: 6px;
+      border-radius: 10px;
+    }
+    .token-identity-img,
+    .token-identity-placeholder {
+      width: 22px;
+      height: 22px;
+    }
+    .token-identity-name { font-size: 0.72rem; }
+    .token-identity-symbol { display: none; }
+
+    /* Roam button: top-right, aligned with token identity */
+    .roam-btn {
+      top: calc(env(safe-area-inset-top, 8px) + 48px);
       right: 8px;
-      justify-content: center;
-      flex-wrap: wrap;
-      padding: 4px 6px;
+      padding: 5px 10px;
+      font-size: 0.62rem;
+      border-radius: 10px;
     }
-    .phase-pill, .tier-pill, .legendary-pill {
-      font-size: 0.68rem;
-      padding: 3px 8px;
+
+    /* HUD: compact */
+    .world-hud {
+      font-size: 0.62rem;
+      padding: 2px 6px;
+      gap: 3px;
     }
+    .hud-icon { font-size: 0.70rem; }
+    .hud-period { display: none; }
+    .hud-period + .hud-sep { display: none; }
+
+    /* Bottom area layout on mobile:
+       From bottom up:
+       1. stats-bar (bottom: safe-area)
+       2. status-strip (above stats-bar)
+       3. sound/music toggles (above status-strip)
+    */
+
     .stats-bar {
-      bottom: 8px;
+      bottom: calc(8px + env(safe-area-inset-bottom, 0px));
       left: 8px;
       right: 8px;
       gap: 6px;
@@ -2103,62 +2139,62 @@
       justify-content: center;
       border-radius: 14px;
     }
-    .stat-val { font-size: 0.75rem; }
-    .stat-lbl { font-size: 0.6rem; }
-    .drawer-toggle { width: 28px; height: 28px; }
-    .drawer { width: 100vw; max-width: 100vw; }
+    .stat-val { font-size: 0.72rem; }
+    .stat-lbl { font-size: 0.58rem; }
+    .drawer-toggle { width: 26px; height: 26px; }
+
+    .status-strip {
+      bottom: calc(50px + env(safe-area-inset-bottom, 0px));
+      left: 8px;
+      right: 8px;
+      justify-content: center;
+      flex-wrap: wrap;
+      padding: 3px 6px;
+      border-radius: 12px;
+    }
+    .phase-pill, .tier-pill, .legendary-pill {
+      font-size: 0.62rem;
+      padding: 2px 7px;
+    }
+
+    /* Sound/music toggles: above status strip, left side */
+    .sound-toggle {
+      bottom: calc(82px + env(safe-area-inset-bottom, 0px));
+      left: 8px;
+    }
+    .music-toggle {
+      bottom: calc(82px + env(safe-area-inset-bottom, 0px));
+      left: 40px;
+    }
+
+    /* Drawer: full width on mobile */
+    .drawer {
+      width: 100vw;
+      max-width: 100vw;
+      border-radius: 0;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
     .presets-dropdown {
       grid-template-columns: 1fr 1fr;
     }
-    /* Token identity: compact on mobile */
-    .token-identity {
-      top: 60px;
-      left: 8px;
-      right: 8px;
-      padding: 6px 10px;
-      gap: 8px;
-      border-radius: 12px;
-    }
-    .token-identity-img,
-    .token-identity-placeholder {
-      width: 24px;
-      height: 24px;
-    }
-    .token-identity-name { font-size: 0.75rem; }
-    .token-identity-symbol { display: none; }
 
-    /* Roam button: compact on mobile */
-    .roam-btn {
-      top: 60px;
-      right: 8px;
-      padding: 6px 12px;
-      font-size: 0.65rem;
-      border-radius: 10px;
-    }
-
-    /* HUD: compact on mobile */
-    .world-hud {
-      font-size: 0.65rem;
-      padding: 3px 8px;
-      gap: 4px;
-    }
-    .hud-icon { font-size: 0.72rem; }
-    /* Hide period on small screens, keep icon + time */
-    .hud-period { display: none; }
-    /* Hide the separator after hidden period */
-    .hud-period + .hud-sep { display: none; }
-    .sound-toggle { bottom: 56px; left: 8px; }
-    .music-toggle { bottom: 56px; left: 42px; }
-
-    /* Map search: mobile adjustments */
+    /* Map search: mobile */
     .map-search-container { top: 12px; right: 12px; }
     .map-search-container.open { right: 8px; left: 8px; max-width: none; }
-    .map-search-trigger { width: 40px; height: 40px; }
+    .map-search-trigger { width: 38px; height: 38px; }
     .map-presets-dropdown { grid-template-columns: 1fr 1fr; }
 
-    /* Castle loader: compact on mobile */
-    .castle-loader-name { font-size: 0.95rem; }
-    .castle-loader-symbol { font-size: 0.68rem; }
+    /* Castle loader: compact */
+    .castle-loader-name { font-size: 0.92rem; }
+    .castle-loader-symbol { font-size: 0.65rem; }
+
+    /* Hide bottom UI when roaming (joystick occupies that space) */
+    .status-strip.roaming,
+    .stats-bar.roaming,
+    .sound-toggle.roaming,
+    .music-toggle.roaming {
+      display: none;
+    }
   }
 
   /* ---- Sound toggle ---- */
