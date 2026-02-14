@@ -178,7 +178,8 @@ export class WorldRenderer3D {
     this.renderer = new THREE.WebGLRenderer({
       antialias: this.qualityConfig.antialias,
       alpha: false,
-      powerPreference: 'high-performance'
+      powerPreference: 'high-performance',
+      preserveDrawingBuffer: true,
     });
     this.renderer.setSize(this.width, this.height);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.qualityConfig.pixelRatio));
@@ -1601,6 +1602,12 @@ export class WorldRenderer3D {
   /** Mobile camera look passthrough. */
   setRoamLookDelta(dx: number, dy: number): void {
     this.roamingSystem.setLookDelta(dx, dy);
+  }
+
+  /** Capture a screenshot of the current 3D scene as a PNG data URL. */
+  captureScreenshot(): string {
+    this.doRender();
+    return this.renderer.domElement.toDataURL('image/png');
   }
 
   destroy(): void {

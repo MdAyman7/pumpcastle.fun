@@ -76,6 +76,11 @@
   let isRoaming = false;
   const isMobile = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
 
+  // Share / screenshot
+  let showShareModal = false;
+  let screenshotDataUrl = '';
+  let tweetText = '';
+
   // Tier icons for map region display
   function getTierIcon(tier: string, phase: string): string {
     if (phase === 'construction') return '🏗';
@@ -388,6 +393,62 @@
     if (renderer && isRoaming) {
       renderer.setRoamJoystick(e.detail.x, e.detail.z);
     }
+  }
+
+  // ── Share / Screenshot ──
+
+  function generateTweetText(): string {
+    if (!$tokenData || !$worldState) return '';
+    const symbol = $tokenData.symbol;
+    const tierName = getCastleName($worldState, $tokenData);
+    const mcap = '$' + formatNumber($tokenData.marketCap);
+    const holders = $tokenData.holders.toLocaleString();
+    const period = timeInfo?.periodLabel || 'twilight';
+    const roaming = isRoaming;
+
+    const quotes = roaming ? [
+      `⚔️ Walking the halls of $${symbol}. The ${tierName} looms above — ${mcap} in the war chest.\n\nNot all who wander are lost. Some are scouting.`,
+      `🏰 I roam the ${tierName} of $${symbol} as ${period} falls. ${holders} bannermen hold the walls.\n\nThe castle remembers.`,
+      `🐉 Deep inside the ${tierName} of $${symbol}. Every stone tells a tale of ${mcap}.\n\nWhat is minted may never die.`,
+    ] : [
+      `⚔️ The realm of $${symbol} stands tall. ${tierName}, forged in fire.\n\nWinter may come, but this castle endures.`,
+      `🏰 Behold the ${tierName} of $${symbol} — a kingdom ${mcap} strong.\n\nThe throne is not given. It is taken.`,
+      `🐉 By sword and coin, $${symbol} rises. The ${tierName} commands ${holders} loyal bannermen.\n\nBend the knee or fall.`,
+      `👑 A new age dawns for $${symbol}. From the ashes, a ${tierName} emerges.\n\nAll men must trade.`,
+      `🔥 ${period} falls upon the ${tierName} of $${symbol}.\n\nWhen you play the game of tokens, you win or you get rugged.`,
+      `⚔️ ${mcap} in the war chest. ${holders} bannermen at the gates.\n\nThe $${symbol} ${tierName} will not fall this day.`,
+    ];
+
+    const quote = quotes[Math.floor(Math.random() * quotes.length)];
+    return `${quote}\n\n🏰 pumpcastle.com/${$tokenAddress}\n@pumpcastlefun`;
+  }
+
+  function handleShareCapture() {
+    if (!renderer) return;
+    screenshotDataUrl = renderer.captureScreenshot();
+    tweetText = generateTweetText();
+    showShareModal = true;
+  }
+
+  function handleTweetShare() {
+    const url = `https://pumpcastle.com/${$tokenAddress}`;
+    const intentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent(url)}`;
+    window.open(intentUrl, '_blank');
+  }
+
+  function handleScreenshotDownload() {
+    const link = document.createElement('a');
+    link.href = screenshotDataUrl;
+    link.download = `pumpcastle-${$tokenData?.symbol || 'castle'}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  function closeShareModal() {
+    showShareModal = false;
+    screenshotDataUrl = '';
+    tweetText = '';
   }
 
   function mountRenderer() {
@@ -710,6 +771,54 @@
       Roam
     {/if}
   </button>
+{/if}
+
+<!-- Share screenshot button (castle view only) -->
+{#if viewMode === 'castle' && $worldState && !transitioning}
+  <button class="share-btn" on:click={handleShareCapture} title="Share Screenshot">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+      <path d="M15 8a3 3 0 10-2.977-2.63l-4.94 2.47a3 3 0 100 4.319l4.94 2.47a3 3 0 10.895-1.789l-4.94-2.47a3.027 3.027 0 000-.74l4.94-2.47C13.456 7.68 14.19 8 15 8z"/>
+    </svg>
+  </button>
+{/if}
+
+<!-- Share modal -->
+{#if showShareModal}
+  <!-- svelte-ignore a11y-click-events-have-key-events -->
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div class="share-backdrop" on:click={closeShareModal}></div>
+  <div class="share-modal">
+    <button class="share-modal-close" on:click={closeShareModal}>&times;</button>
+
+    <!-- Screenshot preview -->
+    {#if screenshotDataUrl}
+      <!-- svelte-ignore a11y-missing-attribute -->
+      <img class="share-preview-img" src={screenshotDataUrl} alt="Castle screenshot" />
+    {/if}
+
+    <!-- Token badge on preview -->
+    {#if $tokenData && $worldState}
+      <div class="share-token-badge">
+        <span class="share-token-name">{getCastleName($worldState, $tokenData)}</span>
+        <span class="share-token-sym">${$tokenData.symbol}</span>
+      </div>
+    {/if}
+
+    <!-- Tweet text preview -->
+    <div class="share-tweet-preview">
+      <p class="share-tweet-text">{tweetText}</p>
+    </div>
+
+    <!-- Action buttons -->
+    <div class="share-actions">
+      <button class="share-tweet-btn" on:click={handleTweetShare}>
+        Share to 𝕏
+      </button>
+      <button class="share-download-btn" on:click={handleScreenshotDownload}>
+        Save Image
+      </button>
+    </div>
+  </div>
 {/if}
 
 <!-- Mobile virtual joystick (roaming only) -->
@@ -2075,6 +2184,228 @@
     font-size: 0.82rem;
   }
 
+  /* ---- Share button ---- */
+  .share-btn {
+    position: fixed;
+    top: 118px;
+    right: 24px;
+    z-index: 15;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(28px) saturate(1.6);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    background: linear-gradient(
+      160deg,
+      rgba(0, 0, 0, 0.45) 0%,
+      rgba(0, 0, 0, 0.30) 100%
+    );
+    color: #c0c0cc;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, transform 0.15s, color 0.15s;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    padding: 0;
+  }
+  .share-btn:hover {
+    background: linear-gradient(
+      160deg,
+      rgba(0, 0, 0, 0.55) 0%,
+      rgba(0, 0, 0, 0.45) 100%
+    );
+    border-color: rgba(255, 255, 255, 0.28);
+    color: #fafafa;
+    transform: translateY(-1px);
+  }
+  .share-btn:active {
+    transform: translateY(0);
+  }
+  .share-btn svg {
+    opacity: 0.8;
+  }
+  .share-btn:hover svg {
+    opacity: 1;
+  }
+
+  /* ---- Share modal ---- */
+  .share-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    animation: shareBackdropIn 0.2s ease-out;
+  }
+
+  @keyframes shareBackdropIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .share-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 65;
+    width: 90vw;
+    max-width: 400px;
+    padding: 20px;
+    border-radius: 20px;
+    backdrop-filter: blur(32px) saturate(1.6);
+    -webkit-backdrop-filter: blur(32px) saturate(1.6);
+    background: linear-gradient(
+      160deg,
+      rgba(0, 0, 0, 0.55) 0%,
+      rgba(0, 0, 0, 0.45) 40%,
+      rgba(0, 0, 0, 0.40) 100%
+    );
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-top-color: rgba(255, 255, 255, 0.22);
+    border-left-color: rgba(255, 255, 255, 0.16);
+    box-shadow:
+      0 16px 64px rgba(0, 0, 0, 0.50),
+      0 4px 20px rgba(0, 0, 0, 0.30),
+      inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    animation: shareModalIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  @keyframes shareModalIn {
+    from { opacity: 0; transform: translate(-50%, -50%) scale(0.92); }
+    to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  }
+
+  .share-modal-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: none;
+    border: none;
+    color: #9494a3;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 8px;
+    transition: color 0.15s, background 0.15s;
+    line-height: 1;
+    z-index: 2;
+  }
+  .share-modal-close:hover {
+    color: #fafafa;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .share-preview-img {
+    width: 100%;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    margin-bottom: 12px;
+  }
+
+  .share-token-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  .share-token-name {
+    font-family: 'Cinzel', serif;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #fafafa;
+    letter-spacing: 0.02em;
+  }
+
+  .share-token-sym {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 0.7rem;
+    color: #9494a3;
+    letter-spacing: 0.03em;
+  }
+
+  .share-tweet-preview {
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    margin-bottom: 16px;
+    max-height: 140px;
+    overflow-y: auto;
+  }
+
+  .share-tweet-text {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: #b0b0be;
+    white-space: pre-line;
+    margin: 0;
+  }
+
+  .share-actions {
+    display: flex;
+    gap: 10px;
+  }
+
+  .share-tweet-btn {
+    flex: 1;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #1d9bf0 0%, #1a8cd8 100%);
+    color: #fff;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    letter-spacing: 0.01em;
+  }
+  .share-tweet-btn:hover {
+    background: linear-gradient(135deg, #2aabff 0%, #1d9bf0 100%);
+    transform: translateY(-1px);
+  }
+  .share-tweet-btn:active {
+    transform: translateY(0);
+  }
+
+  .share-download-btn {
+    flex: 1;
+    padding: 10px 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0.03) 100%
+    );
+    color: #e4e4e7;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+    letter-spacing: 0.01em;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+  .share-download-btn:hover {
+    background: linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.14) 0%,
+      rgba(255, 255, 255, 0.05) 100%
+    );
+    border-color: rgba(255, 255, 255, 0.22);
+    transform: translateY(-1px);
+  }
+  .share-download-btn:active {
+    transform: translateY(0);
+  }
+
   /* ---- Mobile ---- */
   @media (max-width: 640px) {
     /* Top bar: tighter spacing, safe-area aware */
@@ -2194,6 +2525,49 @@
     .sound-toggle.roaming,
     .music-toggle.roaming {
       display: none;
+    }
+
+    /* Share button: below roam btn */
+    .share-btn {
+      top: calc(env(safe-area-inset-top, 8px) + 84px);
+      right: 8px;
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+    }
+
+    /* Share modal: bottom-sheet on mobile */
+    .share-modal {
+      top: auto;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      transform: none;
+      width: 100%;
+      max-width: 100%;
+      border-radius: 20px 20px 0 0;
+      padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px)) 16px;
+      max-height: 85vh;
+      overflow-y: auto;
+      animation: shareSheetUp 0.3s cubic-bezier(0.34, 1.2, 0.64, 1);
+    }
+
+    @keyframes shareSheetUp {
+      from { opacity: 0; transform: translateY(100%); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .share-preview-img {
+      border-radius: 10px;
+    }
+
+    .share-tweet-preview {
+      max-height: 100px;
+    }
+
+    .share-actions {
+      flex-direction: column;
+      gap: 8px;
     }
   }
 
