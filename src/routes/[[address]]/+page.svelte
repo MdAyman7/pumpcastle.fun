@@ -430,9 +430,36 @@
     showShareModal = true;
   }
 
-  function handleTweetShare() {
-    const url = `https://pumpcastle.com/${$tokenAddress}`;
-    const intentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent(url)}`;
+  /** Convert a base64 data URL to a File object for Web Share API */
+  function dataUrlToFile(dataUrl: string, filename: string): File {
+    const [header, base64] = dataUrl.split(',');
+    const mime = header.match(/:(.*?);/)?.[1] || 'image/png';
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new File([bytes], filename, { type: mime });
+  }
+
+  async function handleTweetShare() {
+    const filename = `pumpcastle-${$tokenData?.symbol || 'castle'}.png`;
+
+    // Try Web Share API first (mobile — attaches the image natively)
+    if (navigator.share && navigator.canShare) {
+      try {
+        const file = dataUrlToFile(screenshotDataUrl, filename);
+        const shareData: ShareData = { text: tweetText, files: [file] };
+        if (navigator.canShare(shareData)) {
+          await navigator.share(shareData);
+          return;
+        }
+      } catch (e: any) {
+        // User cancelled or share failed — fall through to Twitter intent
+        if (e?.name === 'AbortError') return;
+      }
+    }
+
+    // Fallback: Twitter Web Intent (no image, but link is in the text)
+    const intentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
     window.open(intentUrl, '_blank');
   }
 
