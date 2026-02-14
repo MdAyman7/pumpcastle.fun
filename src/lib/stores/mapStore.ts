@@ -2,7 +2,7 @@
  * mapStore.ts
  *
  * Multi-token store for the world map view.
- * Fetches real tokens via the batch API and derives MapRegion data.
+ * Fetches top pump.fun tokens via the discover API and derives MapRegion data.
  * Supports adding new tokens dynamically (from search).
  */
 
@@ -11,29 +11,45 @@ import type { TokenData, WorldState, MapRegion } from '$lib/types';
 import { computeWorldState } from '$lib/state/CastleState';
 import { fetchTokenData } from './tokenStore';
 
-// Default real Solana token addresses for the map
-const DEFAULT_ADDRESSES = [
-  '9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump',  // Fartcoin
-  'Dfh5DzRgSvvCFDoYc2ciTkMrbDfRKybA4SoFbPmApump',
-  '9PR7nCP9DpcUotnDPVLUBUZKu5WAYkwrCUx9wDnSpump',
-  'a3W4qutoEJA4232T2gwZUfgYJTetr96pU4SJMwppump',
-  '61V8vBaqAGMpgDQi4JcAwo1dmBGHsyhzodcPqnEVpump',
-  'HNg5PYJmtqcmzXrv6S9zP1CDKk5BgDuyFBxbvNApump',
-];
-
 interface TokenEntry {
   token: TokenData;
   state: WorldState;
 }
 
-// All tracked addresses (default + user-added)
-export const trackedAddresses = writable<string[]>([...DEFAULT_ADDRESSES]);
+// All tracked addresses (discovered + user-added)
+export const trackedAddresses = writable<string[]>([]);
 
 export const allTokens = writable<Map<string, TokenEntry>>(new Map());
 export const mapLoading = writable<boolean>(false);
 
 /**
- * Fetch tokens via the batch endpoint.
+ * Fetch top pump.fun tokens from the discover endpoint.
+ * Returns up to 200 tokens sorted by market cap.
+ */
+async function discoverTokens(): Promise<TokenEntry[]> {
+  const entries: TokenEntry[] = [];
+
+  try {
+    const response = await fetch('/api/tokens/discover?limit=200');
+
+    if (response.ok) {
+      const data = await response.json();
+      for (const token of data.tokens) {
+        entries.push({
+          token,
+          state: computeWorldState(token),
+        });
+      }
+    }
+  } catch (err) {
+    console.error('[MapStore] Discover fetch failed:', err);
+  }
+
+  return entries;
+}
+
+/**
+ * Fetch tokens via the batch endpoint (for user-added addresses).
  * Falls back to individual fetches if the batch fails.
  */
 async function batchFetchTokens(addresses: string[]): Promise<Map<string, TokenEntry>> {
@@ -78,15 +94,48 @@ async function batchFetchTokens(addresses: string[]): Promise<Map<string, TokenE
   return entries;
 }
 
-/** Fetch all tracked tokens */
+// Track whether initial discovery has been completed to avoid redundant API calls
+let tokensLoaded = false;
+
+/** Fetch all tokens: discover top pump.fun tokens + any user-added ones */
 export async function loadAllTokens(): Promise<void> {
+  // Skip if tokens are already loaded — the store persists across view transitions
+  if (tokensLoaded) return;
+
   mapLoading.set(true);
   try {
+    // 1. Discover top pump.fun tokens sorted by market cap
+    const discovered = await discoverTokens();
+    const tokenMap = new Map<string, TokenEntry>();
+
+    // Add all discovered tokens
+    const discoveredAddresses: string[] = [];
+    for (const entry of discovered) {
+      tokenMap.set(entry.token.address, entry);
+      discoveredAddresses.push(entry.token.address);
+    }
+
+    // Update tracked addresses with discovered ones
+    trackedAddresses.set(discoveredAddresses);
+
+    // 2. Fetch any user-added addresses not already in the discovered set
     let currentAddresses: string[] = [];
     trackedAddresses.subscribe(v => { currentAddresses = v; })();
 
-    const entries = await batchFetchTokens(currentAddresses);
-    allTokens.set(entries);
+    const extraAddresses = currentAddresses.filter(a => !tokenMap.has(a));
+    if (extraAddresses.length > 0) {
+      const extraEntries = await batchFetchTokens(extraAddresses);
+      for (const [addr, entry] of extraEntries) {
+        tokenMap.set(addr, entry);
+      }
+    }
+
+    allTokens.set(tokenMap);
+
+    // Mark as loaded only if we got actual results
+    if (tokenMap.size > 0) {
+      tokensLoaded = true;
+    }
   } finally {
     mapLoading.set(false);
   }

@@ -19,12 +19,14 @@ export const POST: RequestHandler = async ({ request }) => {
     throw error(400, { message: 'Request body must contain an "addresses" array' });
   }
 
+  // Only accept valid Solana addresses (base58, 32-44 chars)
+  const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
   const addresses: string[] = body.addresses.filter(
-    (a: unknown) => typeof a === 'string' && a.length >= 32
+    (a: unknown) => typeof a === 'string' && solanaAddressRegex.test(a as string)
   );
 
   if (addresses.length === 0) {
-    throw error(400, { message: 'No valid addresses provided' });
+    throw error(400, { message: 'No valid Solana addresses provided. PumpCastle only supports pump.fun tokens.' });
   }
 
   if (addresses.length > 20) {

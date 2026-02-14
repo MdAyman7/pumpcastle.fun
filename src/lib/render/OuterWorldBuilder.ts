@@ -188,7 +188,11 @@ export class OuterWorldBuilder {
     const pathMat = new THREE.MeshStandardMaterial({
       color: 0xc4a672,
       roughness: 0.95,
-      metalness: 0
+      metalness: 0,
+      // Pull roads forward in depth buffer to render above terrain
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
     });
 
     // Main road going outward from gate (positive Z)
@@ -200,7 +204,7 @@ export class OuterWorldBuilder {
       pathMat
     );
     mainPath.rotation.x = -Math.PI / 2;
-    mainPath.position.set(0, 0.02, gateZ + roadLength / 2);
+    mainPath.position.set(0, 0.04, gateZ + roadLength / 2);
     mainPath.receiveShadow = true;
     this.group.add(mainPath);
     this.paths.push(mainPath);
@@ -215,7 +219,7 @@ export class OuterWorldBuilder {
       sidePath.rotation.x = -Math.PI / 2;
       sidePath.rotation.z = angle;
       const dist = wallRadius + 9;
-      sidePath.position.set(Math.sin(angle) * dist, 0.02, Math.cos(angle) * dist);
+      sidePath.position.set(Math.sin(angle) * dist, 0.04, Math.cos(angle) * dist);
       sidePath.receiveShadow = true;
       this.group.add(sidePath);
       this.paths.push(sidePath);
@@ -237,7 +241,7 @@ export class OuterWorldBuilder {
       );
       seg.rotation.x = -Math.PI / 2;
       seg.rotation.z = -a1 - Math.PI / ringSegments;
-      seg.position.set(cx, 0.02, cz);
+      seg.position.set(cx, 0.04, cz);
       seg.receiveShadow = true;
       this.group.add(seg);
       this.paths.push(seg);
@@ -264,14 +268,21 @@ export class OuterWorldBuilder {
     const stoneMat = new THREE.MeshStandardMaterial({
       color: 0xd4c5a0,   // warm sandstone — lighter than grass
       roughness: 0.55,   // polished ceremonial stone — subtle light reflection
-      metalness: 0.08
+      metalness: 0.08,
+      // Pull roads forward in depth buffer to render above terrain
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
     });
     const borderMat = new THREE.MeshStandardMaterial({
       color: 0xc8a84e,   // gold-stone trim
       roughness: 0.45,
       metalness: 0.35,
       emissive: 0xb8942e,
-      emissiveIntensity: 0.03
+      emissiveIntensity: 0.03,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
     });
 
     const ROAD_Y = 0.06;           // above terrain — prevents grass bleed-through
@@ -1468,14 +1479,20 @@ export class OuterWorldBuilder {
     const plazaStoneMat = new THREE.MeshStandardMaterial({
       color: 0xddd0b5,    // slightly lighter than road stone
       roughness: 0.50,    // polished plaza stone — catches ambient light
-      metalness: 0.10
+      metalness: 0.10,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
     });
     const plazaBorderMat = new THREE.MeshStandardMaterial({
       color: 0xc8a84e,    // gold border ring
       roughness: 0.40,
       metalness: 0.40,
       emissive: 0xb8942e,
-      emissiveIntensity: 0.04
+      emissiveIntensity: 0.04,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
     });
     const darkStoneMat = new THREE.MeshStandardMaterial({
       color: 0x8a8a7a,

@@ -169,7 +169,7 @@ export const GET: RequestHandler = async ({ url }) => {
   }
 
   if (address.length < 32) {
-    throw error(400, { message: 'Invalid token address format' });
+    throw error(400, { message: 'Invalid Solana token address. PumpCastle only supports pump.fun tokens.' });
   }
 
   // 1. Check for known mock tokens (development presets)
@@ -181,22 +181,28 @@ export const GET: RequestHandler = async ({ url }) => {
   }
 
   // 2. For real Solana addresses, fetch from Codex API
+  // If trusted=1, skip pump.fun validation (token already came from the discover query)
+  const trusted = url.searchParams.get('trusted') === '1';
   if (isRealSolanaAddress(address)) {
     try {
-      const tokenData = await fetchCodexToken(address);
+      const tokenData = await fetchCodexToken(address, trusted);
       if (tokenData) {
         return json(tokenData);
       }
       // Token not found in Codex
-      throw error(404, { message: 'Token not found. Make sure this is a valid Solana token address.' });
+      throw error(404, { message: 'Token not found. Make sure this is a valid Solana token address on pump.fun.' });
     } catch (e: any) {
       // If it's already an HTTP error from SvelteKit, re-throw
       if (e?.status) throw e;
+      // Check for pump.fun validation failure
+      if (e?.message === 'NOT_PUMP_FUN') {
+        throw error(400, { message: 'This token is not a pump.fun token. PumpCastle only supports tokens launched on pump.fun.' });
+      }
       console.error('[API] Codex fetch error:', e);
       throw error(502, { message: 'Failed to fetch token data from the API. Please try again.' });
     }
   }
 
-  // 3. Unknown non-real address format — return 404
-  throw error(404, { message: 'Token not found' });
+  // 3. Unknown non-real address format — must be a valid Solana address
+  throw error(400, { message: 'Invalid address. PumpCastle only supports Solana tokens launched on pump.fun.' });
 };

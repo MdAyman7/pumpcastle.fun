@@ -29,6 +29,7 @@ import { PhysicsMotion } from './PhysicsMotion';
 import { MemoryRenderer } from './MemoryRenderer';
 import { OuterWorldBuilder } from './OuterWorldBuilder';
 import { WeatherEffects } from './WeatherEffects';
+import { RoamingSystem } from './RoamingSystem';
 import { qualitySettings } from './QualitySettings';
 import type { QualityConfig } from './QualitySettings';
 import { getMusicManager } from '$lib/audio/MusicManager';
@@ -60,6 +61,7 @@ export class WorldRenderer3D {
   private weatherState: WeatherState;
   private weatherEffects: WeatherEffects;
   private musicManager: MusicManager;
+  private roamingSystem: RoamingSystem;
 
   // Lighting
   private sunLight!: THREE.DirectionalLight;
@@ -229,6 +231,7 @@ export class WorldRenderer3D {
     this.weatherState = new WeatherState();
     this.weatherEffects = new WeatherEffects(this.scene);
     this.musicManager = getMusicManager();
+    this.roamingSystem = new RoamingSystem(this.scene, this.camera, this.renderer.domElement);
 
     // Terrain
     this.environmentBuilder.buildTerrain();
@@ -478,6 +481,8 @@ export class WorldRenderer3D {
   // ─── Mouse-hold orbit ────────────────────────────────────
 
   private handlePointerDown(x: number, y: number, e?: MouseEvent): void {
+    // Skip orbit controls while roaming
+    if (this.roamingSystem.isActive()) return;
     // Don't capture if clicking on UI (anything above canvas z-index)
     if (e) {
       const target = e.target as HTMLElement;
@@ -492,6 +497,7 @@ export class WorldRenderer3D {
   }
 
   private handlePointerMove(x: number, y: number): void {
+    if (this.roamingSystem.isActive()) return;
     if (!this.isDragging) return;
     const dx = x - this.dragStartX;
     const dy = y - this.dragStartY;
@@ -530,8 +536,10 @@ export class WorldRenderer3D {
     this.sunLight.shadow.camera.right = qc.shadowCameraRange;
     this.sunLight.shadow.camera.top = qc.shadowCameraRange;
     this.sunLight.shadow.camera.bottom = -qc.shadowCameraRange;
-    this.sunLight.shadow.bias = -0.0001;
-    this.sunLight.shadow.normalBias = 0.02;
+    // Increased normalBias reduces shadow acne on undulating terrain
+    // while bias stays small to avoid peter-panning on castle walls
+    this.sunLight.shadow.bias = -0.0005;
+    this.sunLight.shadow.normalBias = 0.04;
     this.scene.add(this.sunLight);
 
     // Hemisphere: sky/ground bounce fill — bright day, dim night
@@ -1143,8 +1151,12 @@ export class WorldRenderer3D {
     // Day/night (updates sun position, base lighting)
     this.updateDayNightCycle();
 
-    // Camera
-    this.updateCamera(deltaTime);
+    // Camera (skip orbit camera when roaming; RoamingSystem handles it)
+    if (this.roamingSystem.isActive()) {
+      this.roamingSystem.update(deltaTime / 1000);
+    } else {
+      this.updateCamera(deltaTime);
+    }
 
     // Scene elements — always update (castle is focal point)
     this.castleBuilder.update(this.renderState);
@@ -1561,6 +1573,36 @@ export class WorldRenderer3D {
     }
   }
 
+  // ─── Roaming mode ──────────────────────────────────────────
+
+  enterRoamMode(): void {
+    if (!this.worldState || !this.renderState) return;
+    this.roamingSystem.enter(this.worldState.tier, this.renderState);
+  }
+
+  exitRoamMode(): void {
+    this.roamingSystem.exit();
+  }
+
+  isRoaming(): boolean {
+    return this.roamingSystem.isActive();
+  }
+
+  /** Set the callback for when the roaming system self-exits (ESC key). */
+  setRoamExitCallback(cb: () => void): void {
+    this.roamingSystem.onExit = cb;
+  }
+
+  /** Mobile joystick input passthrough. */
+  setRoamJoystick(x: number, z: number): void {
+    this.roamingSystem.setJoystickInput(x, z);
+  }
+
+  /** Mobile camera look passthrough. */
+  setRoamLookDelta(dx: number, dy: number): void {
+    this.roamingSystem.setLookDelta(dx, dy);
+  }
+
   destroy(): void {
     this.stop();
 
@@ -1617,6 +1659,7 @@ export class WorldRenderer3D {
     this.outerWorldBuilder.dispose();
     this.weatherEffects.dispose();
     this.musicManager.dispose();
+    this.roamingSystem.dispose();
 
     // Dispose renderer
     this.renderer.dispose();

@@ -49,7 +49,11 @@ export class EnvironmentBuilder {
       color: 0x5e9658,
       roughness: 0.78,
       metalness: 0.0,
-      vertexColors: true
+      vertexColors: true,
+      // Push ground back in depth buffer to prevent z-fighting with roads/paths/plazas
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
     });
 
     // ─── Shared tree geometries (allocated once) ──────────────
@@ -92,7 +96,9 @@ export class EnvironmentBuilder {
    */
   buildTerrain(): void {
     // Main ground plane with some undulation
-    const groundGeom = new THREE.PlaneGeometry(100, 100, 50, 50);
+    // 80×80 subdivision gives smoother normals under lighting and reduces
+    // faceting artifacts (visible with PCFSoftShadowMap on gentle hills)
+    const groundGeom = new THREE.PlaneGeometry(100, 100, 80, 80);
 
     // Add some height variation
     const positions = groundGeom.attributes.position;
@@ -100,8 +106,9 @@ export class EnvironmentBuilder {
       const x = positions.getX(i);
       const z = positions.getY(i); // Y in plane space = Z in world
 
-      // Gentle hills
-      let height = Math.sin(x * 0.1) * Math.cos(z * 0.1) * 0.5;
+      // Gentle hills — reduced amplitude to prevent terrain poking through
+      // flat elements (roads at y=0.02, plazas, etc.)
+      let height = Math.sin(x * 0.1) * Math.cos(z * 0.1) * 0.3;
 
       // Keep center flat for castle
       const distFromCenter = Math.sqrt(x * x + z * z);
@@ -308,9 +315,13 @@ export class EnvironmentBuilder {
    * When tier/legendary info is provided, excludes trees from roads and ceremonial zones.
    */
   addTrees(tier?: CastleTier, isLegendary?: boolean): void {
-    // Flatten terrain under legendary roads/plazas so green doesn't bleed through
-    if (isLegendary) {
-      this.flattenTerrainForLegendary();
+    // Flatten terrain under roads/plazas so green doesn't bleed through
+    if (tier) {
+      if (isLegendary) {
+        this.flattenTerrainForLegendary();
+      } else {
+        this.flattenTerrainForRoads(tier);
+      }
     }
 
     // Clear existing trees first
@@ -378,6 +389,77 @@ export class EnvironmentBuilder {
       tree.rotation.y = Math.random() * Math.PI * 2;
       this.environmentGroup.add(tree);
       this.trees.push(tree);
+    }
+  }
+
+  /**
+   * Flatten terrain vertices under standard-tier roads (main road, side paths, ring path).
+   * Standard roads sit at y = 0.02, but terrain undulates ±0.5, causing grass to poke through.
+   * This sets terrain height to 0 under all road positions so roads sit cleanly on flat ground.
+   */
+  private flattenTerrainForRoads(tier: CastleTier): void {
+    if (!this.groundMesh) return;
+
+    const geom = this.groundMesh.geometry;
+    const positions = geom.attributes.position;
+    const wallRadius = this.getWallRadius(tier);
+    const gateZ = this.getGateZ(tier);
+    const ringRadius = wallRadius + 5;
+
+    for (let i = 0; i < positions.count; i++) {
+      const x = positions.getX(i);
+      const z = positions.getY(i); // Y in plane space = Z in world
+      const dist = Math.sqrt(x * x + z * z);
+
+      let flatten = false;
+
+      // Castle footprint — flatten everything inside the walls + some margin
+      if (dist < wallRadius + 2) flatten = true;
+
+      // Main road: X ≈ 0, from gate outward (+Z), width 2.5 + margin
+      if (Math.abs(x) < 3 && z > gateZ - 1 && z < gateZ + 32) flatten = true;
+
+      // Side paths at ±45° and ±135° angles, width 1.5 + margin
+      const sideAngles = [Math.PI / 4, -Math.PI / 4, Math.PI * 3 / 4, -Math.PI * 3 / 4];
+      for (const angle of sideAngles) {
+        const dirX = Math.sin(angle);
+        const dirZ = Math.cos(angle);
+        // Project point onto path direction
+        const dot = x * dirX + z * dirZ;
+        if (dot > wallRadius - 2 && dot < wallRadius + 20) {
+          // Perpendicular distance from path center line
+          const perpDist = Math.abs(x * dirZ - z * dirX);
+          if (perpDist < 2.5) flatten = true;
+        }
+      }
+
+      // Ring path around castle
+      if (Math.abs(dist - ringRadius) < 2.5) flatten = true;
+
+      if (flatten) {
+        positions.setZ(i, 0);
+      }
+    }
+
+    positions.needsUpdate = true;
+    geom.computeVertexNormals();
+  }
+
+  private getGateZ(tier: CastleTier): number {
+    switch (tier) {
+      case 'hut': return 1.5;
+      case 'cottage': return 2;
+      case 'tower': return 2;
+      case 'keep': return 2;
+      case 'manor': return 3.5;
+      case 'castle': return 5.25;
+      case 'stronghold': return 7;
+      case 'fortress': return 8.5;
+      case 'palace': return 10.5;
+      case 'citadel': return 12.5;
+      case 'empire': return 14.5;
+      case 'legend': return 16.5;
+      default: return 5.25;
     }
   }
 

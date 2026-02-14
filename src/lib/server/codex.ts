@@ -31,8 +31,8 @@ const CEX_SMALL: Set<string> = new Set([
   'Phemex', 'AscendEX', 'BitMart', 'Deepcoin'
 ]);
 
-// Solana network ID used by Codex
-const SOLANA_NETWORK_ID = 1399811149;
+// Solana network ID used by Codex — ONLY supported network
+export const SOLANA_CODEX_NETWORK_ID = 1399811149;
 
 /**
  * Classify a Codex exchange entry into our tier system.
@@ -76,9 +76,11 @@ function deduplicateExchanges(exchanges: ExchangeListing[]): ExchangeListing[] {
 
 /**
  * Fetch token data from Codex API and map to our TokenData interface.
+ * Only supports Solana tokens launched via pump.fun.
  * Returns null if the token is not found or the API call fails.
+ * Throws an error with a descriptive message if the token is not a pump.fun token.
  */
-export async function fetchCodexToken(address: string): Promise<TokenData | null> {
+export async function fetchCodexToken(address: string, skipPumpFunCheck = false): Promise<TokenData | null> {
   try {
     const codex = getCodex();
 
@@ -88,6 +90,26 @@ export async function fetchCodexToken(address: string): Promise<TokenData | null
 
     const result = res?.filterTokens?.results?.[0];
     if (!result) return null;
+
+    const tokenInfo = result.token;
+
+    // Validate pump.fun — skip when the caller already knows it's a pump.fun token
+    // (e.g. tokens already on the map came from the pump.fun-filtered discover query)
+    if (!skipPumpFunCheck) {
+      const launchpadName = tokenInfo?.launchpad?.name?.toLowerCase() ?? '';
+      const isPumpFunLaunchpad = launchpadName.includes('pump') || launchpadName.includes('pumpfun') || launchpadName.includes('pump.fun');
+
+      // Also check exchanges for PumpSwap / Pump.fun presence (graduated tokens may
+      // no longer carry the launchpad field but still trade on PumpSwap)
+      const exchangeNames: string[] = (tokenInfo?.exchanges ?? []).map((e: any) => (e.name ?? '').toLowerCase());
+      const isPumpFunExchange = exchangeNames.some(
+        (n: string) => n.includes('pump') || n.includes('pumpswap') || n.includes('pump.fun')
+      );
+
+      if (!isPumpFunLaunchpad && !isPumpFunExchange) {
+        throw new Error('NOT_PUMP_FUN');
+      }
+    }
 
     // Parse numeric fields safely
     const marketCap = parseFloat(result.marketCap ?? '0') || 0;
@@ -128,7 +150,6 @@ export async function fetchCodexToken(address: string): Promise<TokenData | null
     athMarketCap = Math.max(athMarketCap, marketCap);
 
     // Graduation: check launchpad data
-    const tokenInfo = result.token;
     const launchpad = tokenInfo?.launchpad;
     const isGraduated = launchpad?.completed ?? (marketCap > 1_000_000);
     const graduatedAt = launchpad?.completedAt
@@ -192,7 +213,9 @@ export async function fetchCodexToken(address: string): Promise<TokenData | null
       graduatedAt,
       exchanges,
     };
-  } catch (err) {
+  } catch (err: any) {
+    // Re-throw NOT_PUMP_FUN so the API layer can return a clear message
+    if (err?.message === 'NOT_PUMP_FUN') throw err;
     console.error(`[Codex] Failed to fetch token ${address}:`, err);
     return null;
   }
@@ -244,8 +267,24 @@ export async function fetchCodexTokens(addresses: string[]): Promise<Map<string,
  * Adapt a single Codex filterTokens result item to TokenData.
  * This is the shared logic extracted from fetchCodexToken.
  */
-function adaptCodexResult(result: any, address: string): TokenData | null {
+function adaptCodexResult(result: any, address: string, skipPumpFunCheck = false): TokenData | null {
   try {
+    // Validate pump.fun — PumpCastle only supports pump.fun tokens
+    // Skip when results already come from a pump.fun-filtered query (e.g. discover endpoint)
+    if (!skipPumpFunCheck) {
+      const tokenInfoCheck = result.token;
+      const launchpadNameCheck = tokenInfoCheck?.launchpad?.name?.toLowerCase() ?? '';
+      const isPumpFunLaunchpad = launchpadNameCheck.includes('pump') || launchpadNameCheck.includes('pumpfun') || launchpadNameCheck.includes('pump.fun');
+
+      // Also check exchanges for PumpSwap / Pump.fun (graduated tokens may not carry launchpad field)
+      const exchangeNamesCheck: string[] = (tokenInfoCheck?.exchanges ?? []).map((e: any) => (e.name ?? '').toLowerCase());
+      const isPumpFunExchange = exchangeNamesCheck.some(
+        (n: string) => n.includes('pump') || n.includes('pumpswap') || n.includes('pump.fun')
+      );
+
+      if (!isPumpFunLaunchpad && !isPumpFunExchange) return null;
+    }
+
     const marketCap = parseFloat(result.marketCap ?? '0') || 0;
     const volume24h = parseFloat(result.volume24 ?? '0') || 0;
     const liquidity = parseFloat(result.liquidity ?? '0') || 0;
@@ -334,5 +373,60 @@ function adaptCodexResult(result: any, address: string): TokenData | null {
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Fetch top pump.fun tokens sorted by market cap.
+ * Uses Codex filterTokens with launchpadName filter, network filter,
+ * sorted by marketCap DESC, limited to `limit` results.
+ * Returns an array of TokenData (only successfully parsed tokens).
+ */
+export async function fetchTopPumpFunTokens(limit: number = 200): Promise<TokenData[]> {
+  try {
+    const codex = getCodex();
+
+    console.log(`[Codex] Fetching top ${limit} pump.fun tokens...`);
+    const startTime = Date.now();
+
+    const res = await codex.queries.filterTokens({
+      filters: {
+        network: [SOLANA_CODEX_NETWORK_ID],
+        launchpadName: ['Pump.fun'],
+        liquidity: { gt: 1000 },
+      },
+      statsType: 'UNFILTERED' as any,
+      rankings: [
+        {
+          attribute: 'marketCap' as any,
+          direction: 'DESC' as any,
+        },
+      ],
+      limit,
+    });
+
+    const elapsed = Date.now() - startTime;
+    const count = res?.filterTokens?.count ?? 0;
+    const items = res?.filterTokens?.results ?? [];
+    console.log(`[Codex] API responded in ${elapsed}ms — count: ${count}, results: ${items.length}`);
+
+    const tokens: TokenData[] = [];
+
+    for (const result of items) {
+      const address = result?.token?.address;
+      if (!address) continue;
+
+      // Skip pump.fun check since we already filtered by launchpadName
+      const tokenData = adaptCodexResult(result, address, true);
+      if (tokenData) {
+        tokens.push(tokenData);
+      }
+    }
+
+    console.log(`[Codex] Parsed ${tokens.length} tokens out of ${items.length} results`);
+    return tokens;
+  } catch (err) {
+    console.error('[Codex] Failed to fetch top pump.fun tokens:', err);
+    return [];
   }
 }

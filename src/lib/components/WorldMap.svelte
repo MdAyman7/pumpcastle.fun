@@ -28,6 +28,9 @@
   let cardX = 0;
   let cardY = 0;
 
+  // ── Launchpad island teaser ──
+  let showLaunchpad = false;
+
   // ── Marker tracking ──
   const markerMap = new Map<string, { marker: maplibregl.Marker; el: HTMLDivElement }>();
   /** Track image URLs that failed to load (CORS etc.) so we don't retry them */
@@ -42,12 +45,12 @@
     return Math.abs(hash);
   }
 
-  /** Map token address → deterministic lat/lng spread across a tighter area */
+  /** Map token address → deterministic lat/lng spread across the map area */
   function getRegionCoords(id: string): [number, number] {
     const h = hashString(id);
-    // Tighter spread: ~6° longitude × ~4° latitude (a few states' worth)
-    const lng = -87 + (h % 600) / 100;
-    const lat = 36 + ((h >>> 12) % 400) / 100;
+    // Wider spread to accommodate up to 200 tokens: ~12° longitude × ~8° latitude
+    const lng = -90 + (h % 1200) / 100;
+    const lat = 34 + ((h >>> 12) % 800) / 100;
     return [lng, lat];
   }
 
@@ -252,11 +255,10 @@
       }
     });
 
-    // Click on map (not marker) → close preview
+    // Click on map (not marker) → close preview & launchpad
     map.on('click', () => {
-      if (previewRegion) {
-        closePreview();
-      }
+      if (previewRegion) closePreview();
+      if (showLaunchpad) showLaunchpad = false;
     });
   });
 
@@ -363,6 +365,39 @@
       </button>
     </div>
   {/if}
+
+  <!-- ═══ LAUNCHPAD ISLAND TEASER ═══ -->
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <!-- svelte-ignore a11y-click-events-have-key-events -->
+  <div
+    class="launchpad-island"
+    class:lp-open={showLaunchpad}
+    on:click|stopPropagation={() => { showLaunchpad = !showLaunchpad; if (showLaunchpad) previewRegion = null; }}
+  >
+    {#if !showLaunchpad}
+      <!-- Collapsed: small teaser -->
+      <div class="lp-collapsed">
+        <span class="lp-icon">🏝️</span>
+        <span class="lp-label">Launchpad Island</span>
+        <span class="lp-ping"></span>
+      </div>
+    {:else}
+      <!-- Expanded: full card -->
+      <div class="lp-expanded">
+        <div class="lp-exp-header">
+          <span class="lp-exp-icon">🚀</span>
+          <span class="lp-exp-title">Launchpad Island</span>
+        </div>
+        <div class="lp-exp-divider"></div>
+        <ul class="lp-exp-features">
+          <li>Launch your own token</li>
+          <li>Claim your island</li>
+          <li>Watch your castle rise</li>
+        </ul>
+        <div class="lp-coming-soon">Coming Soon</div>
+      </div>
+    {/if}
+  </div>
 
   <!-- ═══ BOTTOM ENVIRONMENT STRIP ═══ -->
   <div class="env-strip">
@@ -752,7 +787,216 @@
     letter-spacing: 0.04em;
   }
 
-  /* Mobile: card at bottom center */
+  /* ═══ LAUNCHPAD ISLAND ═══ */
+
+  .launchpad-island {
+    position: absolute;
+    bottom: 48px;
+    right: 16px;
+    z-index: 8;
+    cursor: pointer;
+    border-radius: 14px;
+    backdrop-filter: blur(24px) saturate(1.5);
+    -webkit-backdrop-filter: blur(24px) saturate(1.5);
+    background: linear-gradient(
+      160deg,
+      rgba(25, 38, 68, 0.55) 0%,
+      rgba(12, 18, 38, 0.40) 100%
+    );
+    border: 1px solid rgba(100, 160, 255, 0.10);
+    border-top-color: rgba(100, 160, 255, 0.20);
+    box-shadow:
+      0 4px 20px rgba(0, 0, 0, 0.25),
+      0 0 10px rgba(100, 160, 255, 0.04);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .launchpad-island:hover {
+    border-color: rgba(100, 160, 255, 0.22);
+    box-shadow:
+      0 6px 28px rgba(0, 0, 0, 0.30),
+      0 0 18px rgba(100, 160, 255, 0.08);
+    transform: translateY(-1px);
+  }
+
+  .launchpad-island.lp-open {
+    border-color: rgba(100, 160, 255, 0.20);
+    box-shadow:
+      0 8px 36px rgba(0, 0, 0, 0.35),
+      0 0 24px rgba(100, 160, 255, 0.10);
+  }
+
+  /* ── Collapsed state ── */
+
+  .lp-collapsed {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    animation: lpSlideIn 0.25s ease-out;
+  }
+
+  @keyframes lpSlideIn {
+    from { opacity: 0; transform: translateX(12px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  .lp-icon {
+    font-size: 18px;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+    animation: lpIconBob 3s ease-in-out infinite;
+  }
+
+  @keyframes lpIconBob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-2px); }
+  }
+
+  .lp-label {
+    font-family: 'Cinzel', 'Georgia', serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #7EB8FF;
+    text-transform: uppercase;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    white-space: nowrap;
+  }
+
+  .lp-ping {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #7EB8FF;
+    flex-shrink: 0;
+    animation: lpPing 2s ease-in-out infinite;
+    box-shadow: 0 0 4px rgba(100, 160, 255, 0.4);
+  }
+
+  @keyframes lpPing {
+    0%, 100% { opacity: 1; box-shadow: 0 0 4px rgba(100, 160, 255, 0.4); }
+    50% { opacity: 0.4; box-shadow: 0 0 10px rgba(100, 160, 255, 0.6); }
+  }
+
+  /* ── Expanded state ── */
+
+  .lp-expanded {
+    padding: 14px 16px;
+    width: 200px;
+    animation: lpExpand 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+
+  @keyframes lpExpand {
+    from { opacity: 0; transform: scale(0.92); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .lp-exp-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .lp-exp-icon {
+    font-size: 18px;
+    animation: lpRocketShake 1.5s ease-in-out infinite;
+  }
+
+  @keyframes lpRocketShake {
+    0%, 100% { transform: rotate(0deg); }
+    15% { transform: rotate(-8deg) translateY(-1px); }
+    30% { transform: rotate(6deg); }
+    45% { transform: rotate(-4deg) translateY(-1px); }
+    60% { transform: rotate(2deg); }
+    75% { transform: rotate(0deg); }
+  }
+
+  .lp-exp-title {
+    font-family: 'Cinzel', 'Georgia', serif;
+    font-size: 12px;
+    font-weight: 700;
+    color: #7EB8FF;
+    letter-spacing: 0.03em;
+    flex: 1;
+  }
+
+  .lp-exp-divider {
+    height: 1px;
+    margin: 10px 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(100, 160, 255, 0.15) 30%,
+      rgba(100, 160, 255, 0.15) 70%,
+      transparent 100%
+    );
+  }
+
+  .lp-exp-features {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .lp-exp-features li {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 10px;
+    color: #b8b8cc;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: 0;
+    animation: lpFeatureIn 0.3s ease-out forwards;
+  }
+
+  .lp-exp-features li:nth-child(1) { animation-delay: 0.08s; }
+  .lp-exp-features li:nth-child(2) { animation-delay: 0.16s; }
+  .lp-exp-features li:nth-child(3) { animation-delay: 0.24s; }
+
+  @keyframes lpFeatureIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  .lp-exp-features li::before {
+    content: '◆';
+    color: #5A9AE6;
+    font-size: 5px;
+    flex-shrink: 0;
+  }
+
+  .lp-coming-soon {
+    margin-top: 12px;
+    text-align: center;
+    font-family: 'Cinzel', 'Georgia', serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    background: linear-gradient(
+      90deg,
+      #5A9AE6 0%,
+      #a0d0ff 25%,
+      #ffffff 50%,
+      #a0d0ff 75%,
+      #5A9AE6 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: lpShine 3s linear infinite;
+  }
+
+  @keyframes lpShine {
+    0% { background-position: 200% center; }
+    100% { background-position: -200% center; }
+  }
+
+  /* Mobile */
   @media (max-width: 640px) {
     .region-preview-card {
       width: 85vw;
@@ -760,6 +1004,11 @@
       top: auto !important;
       bottom: 20px;
       transform: translateX(-50%);
+    }
+
+    .launchpad-island {
+      bottom: 48px;
+      right: 8px;
     }
   }
 
