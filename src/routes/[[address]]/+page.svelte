@@ -441,11 +441,10 @@
   }
 
   async function handleTweetShare() {
-    const filename = `pumpcastle-${$tokenData?.symbol || 'castle'}.png`;
-
-    // Try Web Share API first (mobile — attaches the image natively)
-    if (navigator.share && navigator.canShare) {
+    // Mobile: Web Share API with image attached
+    if (isMobile && navigator.share && navigator.canShare) {
       try {
+        const filename = `pumpcastle-${$tokenData?.symbol || 'castle'}.png`;
         const file = dataUrlToFile(screenshotDataUrl, filename);
         const shareData: ShareData = { text: tweetText, files: [file] };
         if (navigator.canShare(shareData)) {
@@ -453,12 +452,11 @@
           return;
         }
       } catch (e: any) {
-        // User cancelled or share failed — fall through to Twitter intent
         if (e?.name === 'AbortError') return;
       }
     }
 
-    // Fallback: Twitter Web Intent (no image, but link is in the text)
+    // Desktop: Twitter Web Intent (text only)
     const intentUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
     window.open(intentUrl, '_blank');
   }
