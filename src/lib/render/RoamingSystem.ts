@@ -77,12 +77,12 @@ export class RoamingSystem {
     // Create mesh
     this.characterMesh = new CharacterMesh();
     this.characterMesh.setPosition(this.character.position);
-    // Face toward the castle (toward origin from spawn)
-    this.characterMesh.setRotation(Math.PI); // face -Z
+    // Face toward the castle (spawn is behind castle at -Z, castle at origin)
+    this.characterMesh.setRotation(0); // face +Z toward castle
     this.scene.add(this.characterMesh.group);
 
-    // Camera: start behind the character, looking toward the castle
-    this.roamCamera.reset(0, 0.35); // yaw=0 means looking along -Z (toward castle)
+    // Camera: start behind the character (further -Z), looking toward castle
+    this.roamCamera.reset(Math.PI, 0.35); // yaw=PI = camera behind character, looking +Z at castle
 
     // Start capturing input
     this.inputManager.attach(this.canvas);

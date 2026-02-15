@@ -604,13 +604,13 @@ export class CollisionWorld {
 
   getSpawnPosition(tier: CastleTier): { x: number; y: number; z: number } {
     const wallR = getWallRadius(tier);
-    const gateZ = getGateZ(tier);
     // Capsule center must be high enough for feet (center - halfHeight - radius) to touch ground.
     // halfHeight = 0.5 * WORLD_SCALE, radius = 0.3 * WORLD_SCALE → center Y = 0.8 * WORLD_SCALE
+    // Spawn behind the castle (-Z) so player sees the castle from a scenic backside angle.
     return {
       x: 0,
       y: 0.8 * WORLD_SCALE, // capsule center above ground
-      z: gateZ + wallR + 3 * WORLD_SCALE, // a bit outside the gate
+      z: -(wallR + 4 * WORLD_SCALE), // behind the castle, looking at it
     };
   }
 }

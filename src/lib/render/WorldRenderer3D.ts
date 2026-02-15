@@ -195,9 +195,9 @@ export class WorldRenderer3D {
 
     // Camera – wider FOV to see more of the world
     const S = WORLD_SCALE;
-    const CAM_S = Math.max(1, S * 0.5); // camera uses reduced scale so castles feel bigger
+    const CAM_S = Math.max(1, S * 0.85); // camera scale — zoomed-out aerial view
     this.camera = new THREE.PerspectiveCamera(55, this.width / this.height, 0.1 * S, 1000 * S);
-    this.baseCameraPosition = new THREE.Vector3(0, 12 * CAM_S, 32 * CAM_S);
+    this.baseCameraPosition = new THREE.Vector3(0, 14 * CAM_S, 32 * CAM_S);
     this.baseLookAt = new THREE.Vector3(0, 2 * S, 0);
     this.camera.position.copy(this.baseCameraPosition);
     this.camera.lookAt(this.baseLookAt);
@@ -987,19 +987,18 @@ export class WorldRenderer3D {
 
     const s = this.getResponsiveDistanceScale();
     const W = WORLD_SCALE;
-    // Camera distance uses a reduced scale so castles feel imposingly large.
-    // Castle geometry is scaled by full WORLD_SCALE, but camera only pulls back
-    // by ~half that, making the castle appear much bigger on screen.
-    const CAM = Math.max(1, WORLD_SCALE * 0.5);
+    // Camera distance — zoomed-out aerial view showing castle and surroundings.
+    // Uses 0.85× WORLD_SCALE for a comfortable aerial perspective.
+    const CAM = Math.max(1, WORLD_SCALE * 0.85);
 
     if (this.worldState.phase === 'construction') {
-      this.baseCameraPosition.set(10 * s * CAM, 10 * s * CAM, 24 * s * CAM);
+      this.baseCameraPosition.set(10 * s * CAM, 12 * s * CAM, 24 * s * CAM);
       this.baseLookAt.set(0, 1 * W, 0);
     } else if (this.worldState.showGraduationCelebration) {
-      this.baseCameraPosition.set(0, 18 * s * CAM, 35 * s * CAM);
+      this.baseCameraPosition.set(0, 20 * s * CAM, 35 * s * CAM);
       this.baseLookAt.set(0, 3 * W, 0);
     } else if (this.worldState.isLegendary) {
-      this.baseCameraPosition.set(0, 20 * s * CAM, 45 * s * CAM);
+      this.baseCameraPosition.set(0, 22 * s * CAM, 45 * s * CAM);
       this.baseLookAt.set(0, 3 * W, 0);
     } else {
       const tierDistance: Record<string, number> = {
@@ -1008,7 +1007,7 @@ export class WorldRenderer3D {
         'palace': 40, 'citadel': 44, 'empire': 48, 'legend': 52
       };
       const dist = (tierDistance[this.worldState.tier] || 32) * s * CAM;
-      this.baseCameraPosition.set(dist * 0.35, 12 * s * CAM, dist);
+      this.baseCameraPosition.set(dist * 0.35, 14 * s * CAM, dist);
       this.baseLookAt.set(0, 2 * W, 0);
     }
 
