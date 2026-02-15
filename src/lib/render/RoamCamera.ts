@@ -7,18 +7,19 @@
  */
 
 import * as THREE from 'three';
+import { WORLD_SCALE } from '$lib/state/CastleConstants';
 
 export class RoamCamera {
   // ── Orbit parameters ──
   yaw = 0;            // horizontal angle (radians, 0 = looking along -Z)
   pitch = 0.35;       // vertical angle (radians, positive = above)
-  distance = 5;       // orbit distance from target
+  distance = 5 * WORLD_SCALE;       // orbit distance from target
 
   // ── Limits ──
   readonly minPitch = -0.15;   // slightly below horizontal
   readonly maxPitch = 1.25;    // nearly overhead
-  readonly minDistance = 1.5;
-  readonly maxDistance = 12;
+  readonly minDistance = 1.5 * WORLD_SCALE;
+  readonly maxDistance = 12 * WORLD_SCALE;
 
   // ── Look sensitivity ──
   readonly mouseSensitivity = 0.003;

@@ -31,45 +31,59 @@
 import type { CastleTier, WallStrengthTier, WallDefense } from "$lib/types";
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 0. WORLD SCALE — Global multiplier for all castle & environment geometry
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Everything in the 3D world is multiplied by this factor.
+// Increase this to make castles feel like massive kingdoms.
+// All subsystems (collision, camera, fog, environment) respect this.
+
+export const WORLD_SCALE = 10;
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 1. TIER — Market cap thresholds for castle tier classification
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // CastleTier is a permanent structural identity — once reached via ATH, the
 // tier never decreases.  Pre-graduation tokens are always 'hut'.
 //
+// Thresholds shifted down ~10x so bigger castles appear at lower market caps.
+// What was previously a $5M castle is now a $500K castle.
+// High tiers ($100M+) feel like sprawling kingdoms.
+//
 //   Tier          ATH Market Cap       Visual identity
 //   ──────────    ─────────────────    ────────────────────────────
 //   hut           (pre-graduation)     Tiny shack, no walls
-//   cottage       graduated → $200K    Small home, basic fence
-//   tower         $200K → $500K        Single watchtower
-//   keep          $500K → $1M          Walled enclosure, 2 towers
-//   manor         $1M → $2M            Residential estate
-//   castle        $2M → $5M            Full castle with courtyard
-//   stronghold    $5M → $10M           Military fortification
-//   fortress      $10M → $50M          Major fortress complex
-//   palace        $50M → $100M         Royal palace
-//   citadel       $100M → $500M        Massive citadel
-//   empire        $500M → $1B          Multi-structure empire
-//   legend        $1B+                 Legendary monument
+//   cottage       graduated → $100K    Small home, basic fence
+//   tower         $100K → $200K        Single watchtower
+//   keep          $200K → $500K        Walled enclosure, 2 towers
+//   manor         $500K → $1M          Residential estate
+//   castle        $1M → $2M            Full castle with courtyard
+//   stronghold    $2M → $5M            Military fortification
+//   fortress      $5M → $10M           Major fortress complex
+//   palace        $10M → $50M          Royal palace
+//   citadel       $50M → $100M         Massive citadel
+//   empire        $100M → $500M        Multi-structure empire
+//   legend        $500M+               Legendary monument
 
 export const TIER = {
   /** Market cap thresholds in descending order: [minMarketCap, tierName] */
   THRESHOLDS: [
-    [1_000_000_000, "legend"],
-    [500_000_000, "empire"],
-    [100_000_000, "citadel"],
-    [50_000_000, "palace"],
-    [10_000_000, "fortress"],
-    [5_000_000, "stronghold"],
-    [2_000_000, "castle"],
-    [1_000_000, "manor"],
-    [500_000, "keep"],
-    [200_000, "tower"],
+    [500_000_000, "legend"],
+    [100_000_000, "empire"],
+    [50_000_000, "citadel"],
+    [10_000_000, "palace"],
+    [5_000_000, "fortress"],
+    [2_000_000, "stronghold"],
+    [1_000_000, "castle"],
+    [500_000, "manor"],
+    [200_000, "keep"],
+    [100_000, "tower"],
     [0, "cottage"],
   ] as [number, CastleTier][],
 
   /** ATH threshold for "legendary" status (permanent glow effects) */
-  LEGENDARY_THRESHOLD: 100_000_000,
+  LEGENDARY_THRESHOLD: 50_000_000,
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -100,9 +114,9 @@ export const SCALE = {
   /** Market cap where grandeur (0–1) saturates */
   GRANDEUR_CAP_MCAP: 2_000_000_000,
 
-  /** Castle height range in Three.js units */
-  MIN_HEIGHT: 1.5,
-  MAX_HEIGHT: 20,
+  /** Castle height range in Three.js units (multiplied by WORLD_SCALE) */
+  MIN_HEIGHT: 1.5 * WORLD_SCALE,
+  MAX_HEIGHT: 20 * WORLD_SCALE,
 
   /** Tower count range */
   MIN_TOWERS: 0,

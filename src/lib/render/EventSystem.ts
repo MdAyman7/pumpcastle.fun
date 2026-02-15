@@ -7,6 +7,7 @@
 
 import * as THREE from 'three';
 import type { RenderState } from '$lib/types';
+import { WORLD_SCALE } from '$lib/state/CastleConstants';
 import { getAudioCueSystem } from '$lib/audio/AudioCueSystem';
 
 export type MicroEventType =
@@ -72,6 +73,7 @@ export class EventSystem {
 
     this.eventGroup = new THREE.Group();
     this.eventGroup.name = 'events';
+    this.eventGroup.scale.setScalar(WORLD_SCALE);
     this.scene.add(this.eventGroup);
 
     // Create flash light (reused for multiple events)

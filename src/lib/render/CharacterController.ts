@@ -8,25 +8,26 @@
 
 import * as THREE from 'three';
 import type { CollisionWorld } from './CollisionWorld';
+import { WORLD_SCALE } from '$lib/state/CastleConstants';
 
 export class CharacterController {
   position: THREE.Vector3;
   velocity: THREE.Vector3;
 
-  // Capsule dimensions
-  readonly radius = 0.3;
-  readonly halfHeight = 0.5; // half of the cylinder portion
-  readonly eyeHeight = 1.4;  // camera target height above feet
+  // Capsule dimensions — scaled to match world size
+  readonly radius = 0.3 * WORLD_SCALE;
+  readonly halfHeight = 0.5 * WORLD_SCALE; // half of the cylinder portion
+  readonly eyeHeight = 1.4 * WORLD_SCALE;  // camera target height above feet
 
-  // Movement tuning
-  readonly walkSpeed = 4.0;
-  readonly sprintSpeed = 7.0;
-  readonly acceleration = 30;
+  // Movement tuning — speeds scale with world so movement feels proportional
+  readonly walkSpeed = 4.0 * WORLD_SCALE;
+  readonly sprintSpeed = 7.0 * WORLD_SCALE;
+  readonly acceleration = 30 * WORLD_SCALE;
   readonly friction = 12;
   readonly airFriction = 2;
-  readonly jumpForce = 6.0;
-  readonly gravity = -18;
-  readonly maxFallSpeed = -30;
+  readonly jumpForce = 6.0 * WORLD_SCALE;
+  readonly gravity = -18 * WORLD_SCALE;
+  readonly maxFallSpeed = -30 * WORLD_SCALE;
 
   // State
   isGrounded = false;

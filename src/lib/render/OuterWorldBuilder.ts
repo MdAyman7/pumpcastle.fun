@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import type { RenderState, CastleTier, ExchangeListing } from '$lib/types';
 import type { WeatherRenderState } from '$lib/state/WeatherState';
+import { WORLD_SCALE } from '$lib/state/CastleConstants';
 import { getTokenColors, getMaterialWear, categorizeExchanges, getMoodEmissiveScale, getExchangeColor, type TokenColors, type MaterialWear } from './TokenIdentity';
 
 interface Villager {
@@ -87,6 +88,7 @@ export class OuterWorldBuilder {
     this.seed = seed;
     this.group = new THREE.Group();
     this.group.name = 'outerWorld';
+    this.group.scale.setScalar(WORLD_SCALE);
     this.scene.add(this.group);
 
     this.parkGroup = new THREE.Group();

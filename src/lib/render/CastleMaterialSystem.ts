@@ -75,219 +75,219 @@ export interface ColorPalette {
 
 const PALETTES: Record<CastleTier, ColorPalette> = {
   hut: {
-    // ─── Raw mud/thatch, very humble ─────────────────────────────
-    primary:            0x8E7A52,
-    primaryHighlight:   0x9C8860,
-    primaryShadow:      0x7E6A44,
-    secondary:          0x6E5E44,
-    secondaryHighlight: 0x7C6C52,
-    secondaryShadow:    0x604E38,
-    roof:               0x6B5A40,
-    roofHighlight:      0x7A6A50,
-    accent:             0xC49C58,
-    accentHighlight:    0xD4AC68,
-    trim:               0xA47A3C,
-    trimHighlight:      0xB48A4C,
+    // ─── Raw mud/thatch, very humble — earthy warm clay ─────────
+    primary:            0x9C8860,
+    primaryHighlight:   0xAA9670,
+    primaryShadow:      0x8A7850,
+    secondary:          0x7A6A4E,
+    secondaryHighlight: 0x887A5C,
+    secondaryShadow:    0x6C5C42,
+    roof:               0x7A6840,
+    roofHighlight:      0x8A7850,
+    accent:             0xCC9E58,
+    accentHighlight:    0xDCAE68,
+    trim:               0xAA8040,
+    trimHighlight:      0xBA9050,
     glow:               0x000000,
-    foundation:         0x6A6050,
+    foundation:         0x786A52,
     woodTint:           0x7A5A38,
   },
   cottage: {
-    // ─── Simple stone + wood, warm tones ─────────────────────────
-    primary:            0x947E60,
-    primaryHighlight:   0xA28E70,
-    primaryShadow:      0x846E50,
-    secondary:          0x70604A,
-    secondaryHighlight: 0x7E6E58,
-    secondaryShadow:    0x625040,
-    roof:               0x6B5A44,
-    roofHighlight:      0x7A6A54,
-    accent:             0xCCA860,
-    accentHighlight:    0xDCB870,
-    trim:               0xB28C4C,
-    trimHighlight:      0xC29C5C,
+    // ─── Warm fieldstone + timber, golden hour tones ────────────
+    primary:            0xA89470,
+    primaryHighlight:   0xB8A480,
+    primaryShadow:      0x988460,
+    secondary:          0x847058,
+    secondaryHighlight: 0x928068,
+    secondaryShadow:    0x76624A,
+    roof:               0x6E5840,
+    roofHighlight:      0x7E6850,
+    accent:             0xD4AE60,
+    accentHighlight:    0xE4BE70,
+    trim:               0xBC9450,
+    trimHighlight:      0xCCA460,
     glow:               0x000000,
-    foundation:         0x706858,
+    foundation:         0x7A7058,
     woodTint:           0x8A6A42,
   },
   tower: {
-    // ─── Grey stone, slightly refined ───────────────────────────
-    primary:            0x968A72,
-    primaryHighlight:   0xA49A82,
-    primaryShadow:      0x887C64,
-    secondary:          0x7A7060,
-    secondaryHighlight: 0x887E6E,
-    secondaryShadow:    0x6C6254,
-    roof:               0x5A4A3A,
-    roofHighlight:      0x6A5A4A,
-    accent:             0xD0AC58,
-    accentHighlight:    0xE0BC68,
-    trim:               0xB48C44,
-    trimHighlight:      0xC49C54,
+    // ─── Cut stone, warm grey with golden highlights ────────────
+    primary:            0xA89880,
+    primaryHighlight:   0xB8A890,
+    primaryShadow:      0x988870,
+    secondary:          0x8A7E6A,
+    secondaryHighlight: 0x988E7A,
+    secondaryShadow:    0x7C705E,
+    roof:               0x5C4E3C,
+    roofHighlight:      0x6C5E4C,
+    accent:             0xD8B460,
+    accentHighlight:    0xE8C470,
+    trim:               0xC09A4C,
+    trimHighlight:      0xD0AA5C,
     glow:               0x000000,
-    foundation:         0x787060,
+    foundation:         0x847A68,
     woodTint:           0x886840,
   },
   keep: {
-    // ─── Warm stone, earthy tones ───────────────────────────────
-    primary:            0xA08C66,
-    primaryHighlight:   0xAE9A78,
-    primaryShadow:      0x907C58,
-    secondary:          0x7A6B55,
-    secondaryHighlight: 0x877862,
-    secondaryShadow:    0x6E604C,
-    roof:               0x6B5A44,
-    roofHighlight:      0x7A6A54,
-    accent:             0xDCAA62,
-    accentHighlight:    0xECBA72,
-    trim:               0xC08A48,
-    trimHighlight:      0xD09A58,
-    glow:               0x000000,
-    foundation:         0x7A7060,
+    // ─── Warm sandstone, Bojnice-inspired golden buff ────────────
+    primary:            0xB8A480,
+    primaryHighlight:   0xC8B490,
+    primaryShadow:      0xA89470,
+    secondary:          0x948468,
+    secondaryHighlight: 0xA29478,
+    secondaryShadow:    0x86765A,
+    roof:               0x5A4838,
+    roofHighlight:      0x6A5848,
+    accent:             0xE0B868,
+    accentHighlight:    0xF0C878,
+    trim:               0xCC9C50,
+    trimHighlight:      0xDCAC60,
+    glow:               0xC8A050,
+    foundation:         0x8A7E68,
     woodTint:           0x8B6A43,
   },
   manor: {
-    // ─── Warmer stone, copper/bronze accents ────────────────────
-    primary:            0x8E8E70,
-    primaryHighlight:   0x9E9E80,
-    primaryShadow:      0x7E7E62,
-    secondary:          0x6A6A58,
-    secondaryHighlight: 0x787868,
-    secondaryShadow:    0x5C5C4C,
-    roof:               0x7A4030,
-    roofHighlight:      0x8A5040,
-    accent:             0xD09448,
-    accentHighlight:    0xE0A458,
-    trim:               0xC88C44,
-    trimHighlight:      0xD89C54,
-    glow:               0xA88040,
-    foundation:         0x6E6E60,
+    // ─── Rich sandstone, copper & bronze, warm elegance ─────────
+    primary:            0xBCA888,
+    primaryHighlight:   0xCCB898,
+    primaryShadow:      0xAC9878,
+    secondary:          0x98886C,
+    secondaryHighlight: 0xA8987C,
+    secondaryShadow:    0x8A7A5E,
+    roof:               0x6E4438,
+    roofHighlight:      0x7E5448,
+    accent:             0xD8A850,
+    accentHighlight:    0xE8B860,
+    trim:               0xCC9844,
+    trimHighlight:      0xDCA854,
+    glow:               0xC09040,
+    foundation:         0x8A8068,
     woodTint:           0x7E5E3E,
   },
   castle: {
-    // ─── Clean stone, rich blue-grey, vivid ─────────────────────
-    primary:            0x5C7A96,
-    primaryHighlight:   0x708EA8,
-    primaryShadow:      0x4A6884,
-    secondary:          0x465A6E,
-    secondaryHighlight: 0x566A7E,
-    secondaryShadow:    0x384C5E,
-    roof:               0x8B1A1A,
-    roofHighlight:      0xA02828,
-    accent:             0xD0AC48,
-    accentHighlight:    0xE0BC5C,
-    trim:               0xE0BC50,
-    trimHighlight:      0xF0CC64,
-    glow:               0xC9A84C,
-    foundation:         0x525860,
+    // ─── Neuschwanstein cream stone, slate roofs, regal ─────────
+    primary:            0xC4B498,
+    primaryHighlight:   0xD4C4A8,
+    primaryShadow:      0xB4A488,
+    secondary:          0xA89880,
+    secondaryHighlight: 0xB8A890,
+    secondaryShadow:    0x988870,
+    roof:               0x504540,
+    roofHighlight:      0x605550,
+    accent:             0xDCB858,
+    accentHighlight:    0xECC868,
+    trim:               0xE0C060,
+    trimHighlight:      0xF0D070,
+    glow:               0xD4B050,
+    foundation:         0x908474,
     woodTint:           0x7A5E3A,
   },
   stronghold: {
-    // ─── Dark steel stone, military feel ────────────────────────
-    primary:            0x506070,
-    primaryHighlight:   0x607080,
-    primaryShadow:      0x405060,
-    secondary:          0x3A4A5A,
-    secondaryHighlight: 0x4A5A6A,
-    secondaryShadow:    0x2E3E4E,
-    roof:               0x6A2020,
-    roofHighlight:      0x803030,
-    accent:             0xD0A840,
-    accentHighlight:    0xE0B850,
-    trim:               0xC89838,
-    trimHighlight:      0xD8A848,
-    glow:               0xD0A840,
-    foundation:         0x484E56,
+    // ─── Weathered fortress stone, iron-bound, formidable ───────
+    primary:            0xA89888,
+    primaryHighlight:   0xB8A898,
+    primaryShadow:      0x988878,
+    secondary:          0x8C7E70,
+    secondaryHighlight: 0x9C8E80,
+    secondaryShadow:    0x7E7062,
+    roof:               0x4A3C34,
+    roofHighlight:      0x5A4C44,
+    accent:             0xD4A848,
+    accentHighlight:    0xE4B858,
+    trim:               0xCC9C40,
+    trimHighlight:      0xDCAC50,
+    glow:               0xD0A848,
+    foundation:         0x7E746A,
     woodTint:           0x6A5038,
   },
   fortress: {
-    // ─── Deep blue stone, rich color, warm highlights ───────────
-    primary:            0x3E5E90,
-    primaryHighlight:   0x5878A8,
-    primaryShadow:      0x304E80,
-    secondary:          0x2E4A74,
-    secondaryHighlight: 0x3E5A88,
-    secondaryShadow:    0x223E66,
-    roof:               0x7A1830,
-    roofHighlight:      0x9A2840,
-    accent:             0xFFD54F,
-    accentHighlight:    0xFFE070,
-    trim:               0xFFB74D,
-    trimHighlight:      0xFFC868,
-    glow:               0xFFD54F,
-    foundation:         0x465468,
+    // ─── Grand limestone, rich warm walls, bronze details ───────
+    primary:            0xC8B89C,
+    primaryHighlight:   0xD8C8AC,
+    primaryShadow:      0xB8A88C,
+    secondary:          0xAA9A82,
+    secondaryHighlight: 0xBAAA92,
+    secondaryShadow:    0x9A8A74,
+    roof:               0x5C4030,
+    roofHighlight:      0x6C5040,
+    accent:             0xE8C458,
+    accentHighlight:    0xF8D468,
+    trim:               0xDCB44C,
+    trimHighlight:      0xECC45C,
+    glow:               0xE0C050,
+    foundation:         0x948878,
     woodTint:           0x6E5238,
   },
   palace: {
-    // ─── Elegant marble, deeper tones, rose-gold accents ────────
-    primary:            0x8880A0,
-    primaryHighlight:   0x9C94B4,
-    primaryShadow:      0x766E8E,
-    secondary:          0x706888,
-    secondaryHighlight: 0x847C9A,
-    secondaryShadow:    0x605878,
-    roof:               0xD4A070,
-    roofHighlight:      0xE4B488,
-    accent:             0xE8D0B0,
-    accentHighlight:    0xF4E0C8,
-    trim:               0xE0B860,
-    trimHighlight:      0xECC878,
-    glow:               0xE0B860,
-    foundation:         0x706880,
+    // ─── Elegant warm marble, rose-gold, sunset stone ───────────
+    primary:            0xD0C0A4,
+    primaryHighlight:   0xE0D0B4,
+    primaryShadow:      0xC0B094,
+    secondary:          0xB4A48C,
+    secondaryHighlight: 0xC4B49C,
+    secondaryShadow:    0xA4947C,
+    roof:               0x6A4838,
+    roofHighlight:      0x7A5848,
+    accent:             0xE8CC78,
+    accentHighlight:    0xF8DC88,
+    trim:               0xE0C060,
+    trimHighlight:      0xF0D078,
+    glow:               0xE0C060,
+    foundation:         0xA09484,
     woodTint:           0x8A7058,
   },
   citadel: {
-    // ─── Premium: deep amethyst-blue, rich gold — fairy-tale ────
-    primary:            0x8878B8,
-    primaryHighlight:   0xA090D0,
-    primaryShadow:      0x7468A4,
-    secondary:          0x6C5EA0,
-    secondaryHighlight: 0x8476B4,
-    secondaryShadow:    0x5C4E90,
-    roof:               0xF0D070,
-    roofHighlight:      0xF8E090,
-    accent:             0xFFF0C8,
-    accentHighlight:    0xFFF8E0,
-    trim:               0xFFD24E,
-    trimHighlight:      0xFFDE6A,
-    glow:               0xF0D070,
-    foundation:         0x7A70A0,
+    // ─── Premium: warm ivory, burnished gold, fairy-tale ────────
+    primary:            0xD8C8AC,
+    primaryHighlight:   0xE8D8BC,
+    primaryShadow:      0xC8B89C,
+    secondary:          0xBCAC90,
+    secondaryHighlight: 0xCCBCA0,
+    secondaryShadow:    0xAC9C82,
+    roof:               0x584030,
+    roofHighlight:      0x685040,
+    accent:             0xF0D470,
+    accentHighlight:    0xFFE488,
+    trim:               0xF0D060,
+    trimHighlight:      0xFFE078,
+    glow:               0xF0D870,
+    foundation:         0xA89C88,
     woodTint:           0x9A8068,
   },
   empire: {
-    // ─── Imperial: deep blue marble, commanding gold ────────────
-    primary:            0x6880A8,
-    primaryHighlight:   0x8098C0,
-    primaryShadow:      0x567098,
-    secondary:          0x506888,
-    secondaryHighlight: 0x687E9C,
-    secondaryShadow:    0x405878,
-    roof:               0xF0C050,
-    roofHighlight:      0xF8D478,
-    accent:             0xFFE8B0,
-    accentHighlight:    0xFFF0CC,
-    trim:               0xFFC030,
-    trimHighlight:      0xFFD050,
-    glow:               0xF0C050,
-    foundation:         0x586880,
+    // ─── Imperial: polished sandstone, commanding gold ──────────
+    primary:            0xDCD0B0,
+    primaryHighlight:   0xECE0C0,
+    primaryShadow:      0xCCC0A0,
+    secondary:          0xC0B498,
+    secondaryHighlight: 0xD0C4A8,
+    secondaryShadow:    0xB0A488,
+    roof:               0x504038,
+    roofHighlight:      0x605048,
+    accent:             0xF4DC78,
+    accentHighlight:    0xFFEC90,
+    trim:               0xF0D450,
+    trimHighlight:      0xFFE468,
+    glow:               0xF4DC70,
+    foundation:         0xACA090,
     woodTint:           0x887060,
   },
   legend: {
-    // ─── Mythic: deep crystalline violet, radiant glow ──────────
-    primary:            0x9088C8,
-    primaryHighlight:   0xA8A0E0,
-    primaryShadow:      0x7C74B4,
-    secondary:          0x7870B0,
-    secondaryHighlight: 0x9088C4,
-    secondaryShadow:    0x6860A0,
-    roof:               0xF8E080,
-    roofHighlight:      0xFFF0A0,
-    accent:             0xFFF8E0,
-    accentHighlight:    0xFFFFFF,
-    trim:               0xFFE060,
+    // ─── Mythic: luminous warm white, radiant golden glow ───────
+    primary:            0xE4D8C0,
+    primaryHighlight:   0xF0E8D4,
+    primaryShadow:      0xD4C8B0,
+    secondary:          0xCCC0A8,
+    secondaryHighlight: 0xDCD0B8,
+    secondaryShadow:    0xBCB098,
+    roof:               0x584840,
+    roofHighlight:      0x685850,
+    accent:             0xFCE888,
+    accentHighlight:    0xFFF4A8,
+    trim:               0xF8E068,
     trimHighlight:      0xFFF088,
-    glow:               0xFFE8A0,
-    foundation:         0x807898,
+    glow:               0xFFECA0,
+    foundation:         0xB8AC98,
     woodTint:           0xA09078,
   },
 };
@@ -323,19 +323,19 @@ interface SurfaceParams {
 
 function qualityRoughness(q: MaterialQuality): SurfaceParams {
   switch (q) {
-    case 'ruins':     return { stone: 0.85, roof: 0.70, accent: 0.45 };
-    case 'normal':    return { stone: 0.62, roof: 0.48, accent: 0.25 };
-    case 'high':      return { stone: 0.42, roof: 0.32, accent: 0.14 };
-    case 'legendary': return { stone: 0.32, roof: 0.25, accent: 0.10 };
+    case 'ruins':     return { stone: 0.82, roof: 0.68, accent: 0.42 };
+    case 'normal':    return { stone: 0.55, roof: 0.42, accent: 0.20 };
+    case 'high':      return { stone: 0.36, roof: 0.26, accent: 0.10 };
+    case 'legendary': return { stone: 0.24, roof: 0.18, accent: 0.06 };
   }
 }
 
 function qualityMetalness(q: MaterialQuality): SurfaceParams {
   switch (q) {
-    case 'ruins':     return { stone: 0.02, roof: 0.02, accent: 0.25 };
-    case 'normal':    return { stone: 0.10, roof: 0.08, accent: 0.55 };
-    case 'high':      return { stone: 0.18, roof: 0.16, accent: 0.75 };
-    case 'legendary': return { stone: 0.20, roof: 0.25, accent: 0.85 };
+    case 'ruins':     return { stone: 0.03, roof: 0.03, accent: 0.28 };
+    case 'normal':    return { stone: 0.12, roof: 0.10, accent: 0.58 };
+    case 'high':      return { stone: 0.20, roof: 0.20, accent: 0.78 };
+    case 'legendary': return { stone: 0.25, roof: 0.30, accent: 0.90 };
   }
 }
 
@@ -352,13 +352,13 @@ interface PhysicalParams {
 function qualityPhysical(q: MaterialQuality): PhysicalParams {
   switch (q) {
     case 'ruins':
-      return { clearcoat: 0.03, clearcoatRoughness: 0.8, sheen: 0.02, sheenRoughness: 0.8, sheenColor: 0xb0a890 };
+      return { clearcoat: 0.04, clearcoatRoughness: 0.75, sheen: 0.03, sheenRoughness: 0.75, sheenColor: 0xC0A880 };
     case 'normal':
-      return { clearcoat: 0.08, clearcoatRoughness: 0.6, sheen: 0.05, sheenRoughness: 0.7, sheenColor: 0xd0c8c0 };
+      return { clearcoat: 0.12, clearcoatRoughness: 0.50, sheen: 0.08, sheenRoughness: 0.60, sheenColor: 0xD8C8B0 };
     case 'high':
-      return { clearcoat: 0.15, clearcoatRoughness: 0.4, sheen: 0.1, sheenRoughness: 0.6, sheenColor: 0xc0c8d0 };
+      return { clearcoat: 0.25, clearcoatRoughness: 0.30, sheen: 0.16, sheenRoughness: 0.45, sheenColor: 0xE8D8C0 };
     case 'legendary':
-      return { clearcoat: 0.35, clearcoatRoughness: 0.2, sheen: 0.25, sheenRoughness: 0.35, sheenColor: 0xFFE8C0 };
+      return { clearcoat: 0.45, clearcoatRoughness: 0.15, sheen: 0.35, sheenRoughness: 0.25, sheenColor: 0xFFF0D0 };
   }
 }
 
@@ -512,10 +512,14 @@ export function createTierMaterials(
   const blendedAccent = new THREE.Color(p.accent).lerp(new THREE.Color(p.accentHighlight), gs * 0.18);
   const blendedTrim = new THREE.Color(p.trim).lerp(new THREE.Color(p.trimHighlight), gs * 0.15);
 
+  // Primary stone — warm stone base with subtle self-illumination at higher tiers
   const primary = new THREE.MeshPhysicalMaterial({
     color: blendedPrimary,
     roughness: qr.stone,
     metalness: qm.stone,
+    // Higher tiers get a faint warm emissive so stone glows subtly even in shadow
+    emissive: isLegendary ? new THREE.Color(0x806040) : (usesPhysical ? new THREE.Color(0x403020) : new THREE.Color(0x000000)),
+    emissiveIntensity: isLegendary ? 0.08 : (usesPhysical ? 0.03 : 0),
     clearcoat: qp.clearcoat,
     clearcoatRoughness: qp.clearcoatRoughness,
     sheen: qp.sheen,
@@ -526,11 +530,13 @@ export function createTierMaterials(
 
   const secondary = new THREE.MeshPhysicalMaterial({
     color: blendedSecondary,
-    roughness: qr.stone + 0.05,
+    roughness: qr.stone + 0.04,
     metalness: qm.stone,
-    clearcoat: qp.clearcoat * 0.7,
-    clearcoatRoughness: qp.clearcoatRoughness + 0.1,
-    sheen: qp.sheen * 0.5,
+    emissive: isLegendary ? new THREE.Color(0x604830) : new THREE.Color(0x000000),
+    emissiveIntensity: isLegendary ? 0.05 : 0,
+    clearcoat: qp.clearcoat * 0.8,
+    clearcoatRoughness: qp.clearcoatRoughness + 0.08,
+    sheen: qp.sheen * 0.6,
     sheenRoughness: qp.sheenRoughness,
     sheenColor: new THREE.Color(qp.sheenColor),
     vertexColors: true,
@@ -539,14 +545,14 @@ export function createTierMaterials(
   const roof = new THREE.MeshPhysicalMaterial({
     color: blendedRoof,
     roughness: qr.roof,
-    metalness: isLegendary ? 0.40 : qm.roof,
-    emissive: isLegendary ? new THREE.Color(p.roof) : new THREE.Color(0x000000),
-    emissiveIntensity: isLegendary ? 0.10 : 0,
-    clearcoat: isLegendary ? 0.5 : (usesPhysical ? 0.2 : 0),
-    clearcoatRoughness: isLegendary ? 0.15 : 0.5,
-    sheen: isLegendary ? 0.3 : 0,
+    metalness: isLegendary ? 0.45 : (usesPhysical ? 0.25 : qm.roof),
+    emissive: isLegendary ? new THREE.Color(0x604030) : (usesPhysical ? new THREE.Color(0x302018) : new THREE.Color(0x000000)),
+    emissiveIntensity: isLegendary ? 0.12 : (usesPhysical ? 0.04 : 0),
+    clearcoat: isLegendary ? 0.55 : (usesPhysical ? 0.28 : qp.clearcoat * 0.5),
+    clearcoatRoughness: isLegendary ? 0.12 : 0.40,
+    sheen: isLegendary ? 0.35 : (usesPhysical ? 0.10 : 0),
     sheenRoughness: 0.3,
-    sheenColor: new THREE.Color(isLegendary ? 0xFFF0C0 : 0x000000),
+    sheenColor: new THREE.Color(isLegendary ? 0xFFF0C0 : 0xD0B090),
     vertexColors: true,
   });
 
@@ -555,11 +561,11 @@ export function createTierMaterials(
     roughness: qr.accent,
     metalness: qm.accent,
     emissive: new THREE.Color(p.accent),
-    emissiveIntensity: isLegendary ? 0.30 : (quality === 'high' ? 0.12 : (quality === 'normal' ? 0.06 : 0.03)),
-    clearcoat: isLegendary ? 0.6 : (usesPhysical ? 0.3 : qp.clearcoat),
-    clearcoatRoughness: isLegendary ? 0.1 : (usesPhysical ? 0.3 : qp.clearcoatRoughness),
-    sheen: isLegendary ? 0.4 : qp.sheen,
-    sheenRoughness: 0.25,
+    emissiveIntensity: isLegendary ? 0.40 : (quality === 'high' ? 0.18 : (quality === 'normal' ? 0.08 : 0.04)),
+    clearcoat: isLegendary ? 0.65 : (usesPhysical ? 0.35 : qp.clearcoat),
+    clearcoatRoughness: isLegendary ? 0.08 : (usesPhysical ? 0.25 : qp.clearcoatRoughness),
+    sheen: isLegendary ? 0.45 : qp.sheen,
+    sheenRoughness: 0.20,
     sheenColor: new THREE.Color(isLegendary ? 0xFFF8E1 : qp.sheenColor),
   });
 
@@ -569,54 +575,56 @@ export function createTierMaterials(
     metalness: qm.accent + 0.1,
     emissive: (isLegendary || quality === 'high' || quality === 'normal')
       ? new THREE.Color(p.trim) : new THREE.Color(0x000000),
-    emissiveIntensity: isLegendary ? 0.25 : (quality === 'high' ? 0.10 : (quality === 'normal' ? 0.04 : 0)),
-    clearcoat: isLegendary ? 0.55 : (usesPhysical ? 0.25 : qp.clearcoat),
-    clearcoatRoughness: isLegendary ? 0.1 : (usesPhysical ? 0.3 : qp.clearcoatRoughness),
-    sheen: isLegendary ? 0.35 : qp.sheen,
-    sheenRoughness: 0.25,
+    emissiveIntensity: isLegendary ? 0.35 : (quality === 'high' ? 0.14 : (quality === 'normal' ? 0.06 : 0)),
+    clearcoat: isLegendary ? 0.60 : (usesPhysical ? 0.30 : qp.clearcoat),
+    clearcoatRoughness: isLegendary ? 0.08 : (usesPhysical ? 0.25 : qp.clearcoatRoughness),
+    sheen: isLegendary ? 0.40 : qp.sheen,
+    sheenRoughness: 0.20,
     sheenColor: new THREE.Color(isLegendary ? 0xFFF0C0 : qp.sheenColor),
   });
 
   const glow = new THREE.MeshPhysicalMaterial({
-    color: isLegendary ? p.glow : 0xFFD700,
-    roughness: 0.10,
-    metalness: 0.75,
-    emissive: new THREE.Color(isLegendary ? p.glow : 0xFFD700),
-    emissiveIntensity: isLegendary ? 0.70 : 0.3,
-    clearcoat: isLegendary ? 0.8 : 0.3,
-    clearcoatRoughness: 0.05,
-    sheen: isLegendary ? 0.5 : 0,
-    sheenRoughness: 0.2,
+    color: isLegendary ? p.glow : 0xFFD080,
+    roughness: 0.08,
+    metalness: 0.80,
+    emissive: new THREE.Color(isLegendary ? p.glow : 0xFFD080),
+    emissiveIntensity: isLegendary ? 0.85 : 0.40,
+    clearcoat: isLegendary ? 0.85 : 0.35,
+    clearcoatRoughness: 0.04,
+    sheen: isLegendary ? 0.55 : 0.10,
+    sheenRoughness: 0.18,
     sheenColor: new THREE.Color(0xFFF8E1),
   });
 
-  // Inject rim lighting on legendary stone and accent materials
+  // Inject rim lighting — warm golden edge glow for premium feel
   if (isLegendary) {
-    injectRimLight(primary, rimCol, 3.0, 0.35);
-    injectRimLight(secondary, rimCol, 3.0, 0.28);
-    injectRimLight(roof, new THREE.Color(0xFFF0C0), 2.5, 0.20);
-    injectRimLight(accent, new THREE.Color(0xFFFBEF), 2.0, 0.45);
-    injectRimLight(trim, new THREE.Color(0xFFDD63), 2.2, 0.40);
-    injectRimLight(glow, new THREE.Color(0xFFFFFF), 1.8, 0.60);
+    injectRimLight(primary, rimCol, 2.8, 0.45);
+    injectRimLight(secondary, rimCol, 2.8, 0.35);
+    injectRimLight(roof, new THREE.Color(0xFFE8B0), 2.2, 0.30);
+    injectRimLight(accent, new THREE.Color(0xFFF8E0), 1.8, 0.55);
+    injectRimLight(trim, new THREE.Color(0xFFE878), 2.0, 0.50);
+    injectRimLight(glow, new THREE.Color(0xFFFFFF), 1.6, 0.70);
   } else if (quality === 'high') {
-    // Subtle rim for high quality
-    injectRimLight(accent, new THREE.Color(0xFFD54F), 4.0, 0.15);
-    injectRimLight(trim, new THREE.Color(0xFFB74D), 4.0, 0.12);
+    // Warm rim for high quality — makes fortress/palace pop
+    injectRimLight(primary, new THREE.Color(0xD0B080), 4.5, 0.10);
+    injectRimLight(accent, new THREE.Color(0xFFD860), 3.5, 0.22);
+    injectRimLight(trim, new THREE.Color(0xFFC850), 3.5, 0.18);
   } else if (quality === 'normal') {
-    // Very faint rim on accent — prevents flat look on mid-tier castles
-    injectRimLight(accent, new THREE.Color(p.accent), 5.0, 0.08);
+    // Faint warm rim on stone + accent — mid-tier castles feel alive
+    injectRimLight(primary, new THREE.Color(0xC0A070), 5.0, 0.06);
+    injectRimLight(accent, new THREE.Color(p.accent), 4.5, 0.12);
   }
 
   const wood = new THREE.MeshStandardMaterial({
     color: p.woodTint,
-    roughness: 0.85,
-    metalness: 0,
+    roughness: 0.82,
+    metalness: 0.02,
   });
 
   const foundation = new THREE.MeshStandardMaterial({
     color: p.foundation,
-    roughness: 0.95,
-    metalness: 0,
+    roughness: 0.90,
+    metalness: 0.02,
   });
 
   return { primary, secondary, roof, accent, trim, glow, wood, foundation };
@@ -874,8 +882,8 @@ function smoothstep(t: number): number {
 
 // ─── Decay blending ─────────────────────────────────────────
 
-const GREY = new THREE.Color(0x6a6a6a);
-const LEGENDARY_DECAY_GREY = new THREE.Color(0x8a7a8a); // warmer, purplish grey for elegant decay
+const GREY = new THREE.Color(0x787060); // warm grey-brown (not cold grey)
+const LEGENDARY_DECAY_GREY = new THREE.Color(0x988878); // warm sandy grey for elegant decay
 
 /**
  * Apply decay to materials without reverting quality.
@@ -1014,7 +1022,7 @@ export function applyConstructionToMaterials(
   if (progress >= 1) return;
 
   const rawness = 1 - progress; // 1 = totally raw, 0 = finished
-  const constructionGrey = new THREE.Color(0x7A7060);
+  const constructionGrey = new THREE.Color(0x8A7E68); // warm raw stone
 
   for (const key of ['primary', 'secondary'] as const) {
     const mat = mats[key];

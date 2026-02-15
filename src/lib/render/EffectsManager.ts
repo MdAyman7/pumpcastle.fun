@@ -8,6 +8,7 @@
  */
 
 import * as THREE from 'three';
+import { WORLD_SCALE } from '$lib/state/CastleConstants';
 import type { RenderState } from '$lib/types';
 import { seededRandom } from '$lib/state/CastleState';
 
@@ -55,6 +56,7 @@ export class EffectsManager {
 
     this.effectsGroup = new THREE.Group();
     this.effectsGroup.name = 'effects';
+    this.effectsGroup.scale.setScalar(WORLD_SCALE);
     this.scene.add(this.effectsGroup);
 
     // Initialize particle system

@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import type { WorldMemory } from '$lib/state/MemoryState';
+import { WORLD_SCALE } from '$lib/state/CastleConstants';
 
 export class MemoryRenderer {
   private scene: THREE.Scene;
@@ -34,6 +35,7 @@ export class MemoryRenderer {
 
     this.memoryGroup = new THREE.Group();
     this.memoryGroup.name = 'memory_scars';
+    this.memoryGroup.scale.setScalar(WORLD_SCALE);
     this.scene.add(this.memoryGroup);
 
     this.crackMaterial = new THREE.MeshStandardMaterial({

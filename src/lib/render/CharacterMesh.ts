@@ -11,6 +11,7 @@
  */
 
 import * as THREE from 'three';
+import { WORLD_SCALE } from '$lib/state/CastleConstants';
 
 export class CharacterMesh {
   group: THREE.Group;
@@ -53,6 +54,7 @@ export class CharacterMesh {
   constructor() {
     this.ensureMaterials();
     this.group = new THREE.Group();
+    this.group.scale.setScalar(WORLD_SCALE);
     this.group.userData.roamCollide = false; // exclude from camera raycast
 
     // ── Pill Body (the iconic pump.fun slanted capsule) ──
@@ -366,8 +368,10 @@ export class CharacterMesh {
   // ── Position / rotation ────────────────────────────────────
 
   setPosition(pos: THREE.Vector3): void {
-    // pos is the capsule center; feet are at pos.y - halfHeight - radius
-    this.group.position.set(pos.x, pos.y - 0.8, pos.z);
+    // pos is the capsule center; offset visual so pill feet align with capsule feet.
+    // The pill visual center in local coords is at origin; after group scale (WORLD_SCALE),
+    // the offset must also be in world-space.
+    this.group.position.set(pos.x, pos.y - 0.8 * WORLD_SCALE, pos.z);
   }
 
   setRotation(yaw: number): void {

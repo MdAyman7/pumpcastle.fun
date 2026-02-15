@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import type { RenderState, CastleTier } from '$lib/types';
 import type { WeatherRenderState } from '$lib/state/WeatherState';
+import { WORLD_SCALE } from '$lib/state/CastleConstants';
 import { qualitySettings } from './QualitySettings';
 import { getPriceMoodColor } from './TokenIdentity';
 
@@ -46,9 +47,9 @@ export class EnvironmentBuilder {
     this.scene.add(this.environmentGroup);
 
     this.groundMaterial = new THREE.MeshStandardMaterial({
-      color: 0x5e9658,
-      roughness: 0.78,
-      metalness: 0.0,
+      color: 0x5A9450,
+      roughness: 0.75,
+      metalness: 0.02,
       vertexColors: true,
       // Push ground back in depth buffer to prevent z-fighting with roads/paths/plazas
       polygonOffset: true,
@@ -95,10 +96,11 @@ export class EnvironmentBuilder {
    * Build the terrain
    */
   buildTerrain(): void {
-    // Main ground plane with some undulation
+    const S = WORLD_SCALE;
+    // Main ground plane with some undulation — scaled by WORLD_SCALE
     // 80×80 subdivision gives smoother normals under lighting and reduces
     // faceting artifacts (visible with PCFSoftShadowMap on gentle hills)
-    const groundGeom = new THREE.PlaneGeometry(100, 100, 80, 80);
+    const groundGeom = new THREE.PlaneGeometry(100 * S, 100 * S, 80, 80);
 
     // Add some height variation
     const positions = groundGeom.attributes.position;
@@ -108,12 +110,12 @@ export class EnvironmentBuilder {
 
       // Gentle hills — reduced amplitude to prevent terrain poking through
       // flat elements (roads at y=0.02, plazas, etc.)
-      let height = Math.sin(x * 0.1) * Math.cos(z * 0.1) * 0.3;
+      let height = Math.sin(x * 0.1 / S) * Math.cos(z * 0.1 / S) * 0.3 * S;
 
       // Keep center flat for castle
       const distFromCenter = Math.sqrt(x * x + z * z);
-      if (distFromCenter < 15) {
-        height *= distFromCenter / 15;
+      if (distFromCenter < 15 * S) {
+        height *= distFromCenter / (15 * S);
       }
 
       positions.setZ(i, height);
@@ -126,10 +128,10 @@ export class EnvironmentBuilder {
     // Adds organic life to what would otherwise be a flat-colored plane.
     const vertexCount = positions.count;
     const colors = new Float32Array(vertexCount * 3);
-    const baseGreen = new THREE.Color(0x5e9658);
-    const brightPatch = new THREE.Color(0x72b06e); // sunlit patch
-    const richPatch = new THREE.Color(0x4d8248);   // lush shadow
-    const dryPatch = new THREE.Color(0x7a9450);    // slight yellow-green
+    const baseGreen = new THREE.Color(0x5A9450);
+    const brightPatch = new THREE.Color(0x6EA868); // sunlit patch — warm green
+    const richPatch = new THREE.Color(0x4A7E44);   // lush shadow — deeper
+    const dryPatch = new THREE.Color(0x78904C);    // slight yellow-green
 
     for (let i = 0; i < vertexCount; i++) {
       const x = positions.getX(i);
@@ -140,19 +142,19 @@ export class EnvironmentBuilder {
       const c = baseGreen.clone();
 
       // Sunlit clearing near center — brighter, warmer green
-      if (dist < 18) {
-        const centerFactor = 1 - dist / 18;
+      if (dist < 18 * S) {
+        const centerFactor = 1 - dist / (18 * S);
         c.lerp(brightPatch, centerFactor * 0.35);
       }
 
       // Richer lush green at mid-distance (where trees grow)
-      if (dist > 10 && dist < 30) {
-        const midFactor = 1 - Math.abs(dist - 20) / 10;
+      if (dist > 10 * S && dist < 30 * S) {
+        const midFactor = 1 - Math.abs(dist - 20 * S) / (10 * S);
         c.lerp(richPatch, midFactor * 0.2);
       }
 
       // Slight noise-like variation using cheap sine hashing
-      const noise = Math.sin(x * 0.8 + z * 1.1) * Math.cos(x * 0.5 - z * 0.7);
+      const noise = Math.sin(x * 0.8 / S + z * 1.1 / S) * Math.cos(x * 0.5 / S - z * 0.7 / S);
       if (noise > 0.3) {
         c.lerp(brightPatch, (noise - 0.3) * 0.25);
       } else if (noise < -0.3) {
@@ -181,12 +183,13 @@ export class EnvironmentBuilder {
    * Add background hills
    */
   private addHills(): void {
+    const S = WORLD_SCALE;
     const hillPositions = [
-      { x: -30, z: -25, radius: 15, height: 8 },
-      { x: 25, z: -30, radius: 12, height: 6 },
-      { x: -20, z: -35, radius: 10, height: 5 },
-      { x: 35, z: -20, radius: 8, height: 4 },
-      { x: 0, z: -40, radius: 20, height: 10 }
+      { x: -30 * S, z: -25 * S, radius: 15 * S, height: 8 * S },
+      { x: 25 * S, z: -30 * S, radius: 12 * S, height: 6 * S },
+      { x: -20 * S, z: -35 * S, radius: 10 * S, height: 5 * S },
+      { x: 35 * S, z: -20 * S, radius: 8 * S, height: 4 * S },
+      { x: 0, z: -40 * S, radius: 20 * S, height: 10 * S }
     ];
 
     // Each hill gets a unique tint. Distant hills shift slightly blue-green
@@ -196,7 +199,7 @@ export class EnvironmentBuilder {
 
     for (const pos of hillPositions) {
       const dist = Math.sqrt(pos.x * pos.x + pos.z * pos.z);
-      const distanceFactor = Math.min(1, dist / 50); // 0 near, 1 far
+      const distanceFactor = Math.min(1, dist / (50 * S)); // 0 near, 1 far
 
       const hillColor = baseHillColor.clone();
       hillColor.lerp(distantTint, distanceFactor * 0.3);
@@ -230,53 +233,47 @@ export class EnvironmentBuilder {
    * Returns true if the position is too close to a road/entrance and should be excluded.
    */
   private isOnRoad(x: number, z: number, wallRadius: number, isLegendary?: boolean): boolean {
+    const S = WORLD_SCALE;
     // Castle entrance zone (broader exclusion near gate)
-    if (Math.abs(x) < 4 && z > 0 && z < wallRadius + 8) return true;
+    if (Math.abs(x) < 4 * S && z > 0 && z < wallRadius + 8 * S) return true;
 
     // ─── Legendary / Citadel: spline roads + plazas ──────────
     if (isLegendary) {
-      const RING_R = wallRadius + 6;
+      const RING_R = wallRadius + 6 * S;
       const distFromCenter = Math.sqrt(x * x + z * z);
 
       // Inner ceremonial zone — no trees within ring + very generous margin.
-      // This creates the calm, powerful, intentional open space around the castle.
-      // Radius 26 clears all inner trees and near-ring edge cases.
-      if (distFromCenter < RING_R + 6) return true;
+      if (distFromCenter < RING_R + 6 * S) return true;
 
-      // Forward approach cone — the +Z direction (main avenue / entrance) should
-      // be completely clear of trees out to a significant distance.
-      // Any tree with z > 0 and within ±30° of the main axis gets excluded.
-      if (z > 0 && Math.abs(x) < z * 0.65 && distFromCenter < 38) return true;
+      // Forward approach cone
+      if (z > 0 && Math.abs(x) < z * 0.65 && distFromCenter < 38 * S) return true;
 
       // Main avenue: X ≈ 0, from gate to end (+Z) — wide clearance
-      if (Math.abs(x) < 5 && z > wallRadius - 2) return true;
+      if (Math.abs(x) < 5 * S && z > wallRadius - 2 * S) return true;
 
       // Ring boulevard (wider exclusion for legendary smooth ring)
-      if (Math.abs(distFromCenter - RING_R) < 3.5) return true;
+      if (Math.abs(distFromCenter - RING_R) < 3.5 * S) return true;
 
       // Promenades: ±X curves from ring outward and backward (−Z direction)
       for (const side of [-1, 1]) {
-        if (side > 0 && x > RING_R - 3 && x < RING_R + 16 && z > -9 && z < 3) return true;
-        if (side < 0 && x < -RING_R + 3 && x > -RING_R - 16 && z > -9 && z < 3) return true;
+        if (side > 0 && x > RING_R - 3 * S && x < RING_R + 16 * S && z > -9 * S && z < 3 * S) return true;
+        if (side < 0 && x < -RING_R + 3 * S && x > -RING_R - 16 * S && z > -9 * S && z < 3 * S) return true;
       }
 
       // Rear processional path (−Z)
-      if (Math.abs(x) < 3 && z < -RING_R + 2 && z > -RING_R - 14) return true;
+      if (Math.abs(x) < 3 * S && z < -RING_R + 2 * S && z > -RING_R - 14 * S) return true;
 
       // ─── Plaza exclusion zones ────────────────────────────
-      // Grand entrance plaza at (0, RING_R), radius 6 + generous margin
       const dxGrand = x;
       const dzGrand = z - RING_R;
-      if (dxGrand * dxGrand + dzGrand * dzGrand < 9.5 * 9.5) return true;
+      if (dxGrand * dxGrand + dzGrand * dzGrand < (9.5 * S) * (9.5 * S)) return true;
 
-      // Outer waypoint plaza at (0, RING_R+10), radius 3.5 + margin
-      const dzWaypoint = z - (RING_R + 10);
-      if (x * x + dzWaypoint * dzWaypoint < 6.5 * 6.5) return true;
+      const dzWaypoint = z - (RING_R + 10 * S);
+      if (x * x + dzWaypoint * dzWaypoint < (6.5 * S) * (6.5 * S)) return true;
 
-      // Ring crossroad plazas at (±RING_R, 0), radius 2.8 + margin
       for (const side of [-1, 1]) {
         const dxRing = x - side * RING_R;
-        if (dxRing * dxRing + z * z < 5.5 * 5.5) return true;
+        if (dxRing * dxRing + z * z < (5.5 * S) * (5.5 * S)) return true;
       }
 
       return false;
@@ -284,26 +281,24 @@ export class EnvironmentBuilder {
 
     // ─── Standard tiers: original road layout ────────────────
     // Main road: X ≈ 0, Z > wallRadius (extends outward from gate)
-    if (Math.abs(x) < 3 && z > wallRadius - 2) return true;
+    if (Math.abs(x) < 3 * S && z > wallRadius - 2 * S) return true;
 
     // Side paths at ±45° and ±135° angles
     const sideAngles = [Math.PI / 4, -Math.PI / 4, Math.PI * 3 / 4, -Math.PI * 3 / 4];
     for (const angle of sideAngles) {
       const dirX = Math.sin(angle);
       const dirZ = Math.cos(angle);
-      // Project point onto path direction line
       const dot = x * dirX + z * dirZ;
-      if (dot > wallRadius - 1) {
-        // Distance from point to path center line
+      if (dot > wallRadius - 1 * S) {
         const perpDist = Math.abs(x * dirZ - z * dirX);
-        if (perpDist < 2.5) return true;
+        if (perpDist < 2.5 * S) return true;
       }
     }
 
-    // Ring path at wallRadius + 5
-    const ringRadius = wallRadius + 5;
+    // Ring path at wallRadius + 5*S
+    const ringRadius = wallRadius + 5 * S;
     const distFromCenter = Math.sqrt(x * x + z * z);
-    if (Math.abs(distFromCenter - ringRadius) < 2) return true;
+    if (Math.abs(distFromCenter - ringRadius) < 2 * S) return true;
 
     return false;
   }
@@ -330,40 +325,41 @@ export class EnvironmentBuilder {
     }
     this.trees = [];
 
+    const S = WORLD_SCALE;
     const allTreePositions = [
       // Inner ring (always rendered, even on LOW)
-      { x: -12, z: 8 },
-      { x: -14, z: -5 },
-      { x: 13, z: 6 },
-      { x: 15, z: -8 },
-      { x: -10, z: -12 },
-      { x: 10, z: -14 },
-      { x: -18, z: 0 },
-      { x: 18, z: 2 },
+      { x: -12 * S, z: 8 * S },
+      { x: -14 * S, z: -5 * S },
+      { x: 13 * S, z: 6 * S },
+      { x: 15 * S, z: -8 * S },
+      { x: -10 * S, z: -12 * S },
+      { x: 10 * S, z: -14 * S },
+      { x: -18 * S, z: 0 },
+      { x: 18 * S, z: 2 * S },
       // Outer ring (MEDIUM+)
-      { x: -22, z: 12 },
-      { x: -25, z: -3 },
-      { x: 22, z: 10 },
-      { x: 24, z: -6 },
-      { x: -8, z: 20 },
-      { x: 8, z: 22 },
-      { x: -20, z: -15 },
-      { x: 20, z: -18 },
-      { x: 0, z: 25 },
-      { x: -28, z: 8 },
-      { x: 28, z: -2 },
-      { x: -16, z: 18 },
-      { x: 16, z: 16 },
-      { x: -6, z: -22 },
+      { x: -22 * S, z: 12 * S },
+      { x: -25 * S, z: -3 * S },
+      { x: 22 * S, z: 10 * S },
+      { x: 24 * S, z: -6 * S },
+      { x: -8 * S, z: 20 * S },
+      { x: 8 * S, z: 22 * S },
+      { x: -20 * S, z: -15 * S },
+      { x: 20 * S, z: -18 * S },
+      { x: 0, z: 25 * S },
+      { x: -28 * S, z: 8 * S },
+      { x: 28 * S, z: -2 * S },
+      { x: -16 * S, z: 18 * S },
+      { x: 16 * S, z: 16 * S },
+      { x: -6 * S, z: -22 * S },
       // Scattered far trees (HIGH only)
-      { x: 6, z: -20 },
-      { x: -30, z: -10 },
-      { x: 32, z: 12 },
-      { x: -24, z: 20 },
-      { x: 26, z: -16 },
-      { x: 0, z: -28 },
-      { x: -34, z: 4 },
-      { x: 34, z: 8 }
+      { x: 6 * S, z: -20 * S },
+      { x: -30 * S, z: -10 * S },
+      { x: 32 * S, z: 12 * S },
+      { x: -24 * S, z: 20 * S },
+      { x: 26 * S, z: -16 * S },
+      { x: 0, z: -28 * S },
+      { x: -34 * S, z: 4 * S },
+      { x: 34 * S, z: 8 * S }
     ];
 
     // Quality-aware tree count
@@ -379,12 +375,12 @@ export class EnvironmentBuilder {
     for (const pos of treePositions) {
       const tree = this.createTree();
       tree.position.set(pos.x, 0, pos.z);
-      // Legendary: surviving trees are further out — make them taller and more
-      // stately to feel like curated background scenery, not random clutter.
+      // Scale trees proportionally to world scale
+      const treeScale = WORLD_SCALE;
       if (isLegendary) {
-        tree.scale.setScalar(1.1 + Math.random() * 0.5);
+        tree.scale.setScalar((1.1 + Math.random() * 0.5) * treeScale);
       } else {
-        tree.scale.setScalar(0.8 + Math.random() * 0.4);
+        tree.scale.setScalar((0.8 + Math.random() * 0.4) * treeScale);
       }
       tree.rotation.y = Math.random() * Math.PI * 2;
       this.environmentGroup.add(tree);
@@ -400,11 +396,12 @@ export class EnvironmentBuilder {
   private flattenTerrainForRoads(tier: CastleTier): void {
     if (!this.groundMesh) return;
 
+    const S = WORLD_SCALE;
     const geom = this.groundMesh.geometry;
     const positions = geom.attributes.position;
     const wallRadius = this.getWallRadius(tier);
     const gateZ = this.getGateZ(tier);
-    const ringRadius = wallRadius + 5;
+    const ringRadius = wallRadius + 5 * S;
 
     for (let i = 0; i < positions.count; i++) {
       const x = positions.getX(i);
@@ -414,27 +411,25 @@ export class EnvironmentBuilder {
       let flatten = false;
 
       // Castle footprint — flatten everything inside the walls + some margin
-      if (dist < wallRadius + 2) flatten = true;
+      if (dist < wallRadius + 2 * S) flatten = true;
 
       // Main road: X ≈ 0, from gate outward (+Z), width 2.5 + margin
-      if (Math.abs(x) < 3 && z > gateZ - 1 && z < gateZ + 32) flatten = true;
+      if (Math.abs(x) < 3 * S && z > gateZ - 1 * S && z < gateZ + 32 * S) flatten = true;
 
       // Side paths at ±45° and ±135° angles, width 1.5 + margin
       const sideAngles = [Math.PI / 4, -Math.PI / 4, Math.PI * 3 / 4, -Math.PI * 3 / 4];
       for (const angle of sideAngles) {
         const dirX = Math.sin(angle);
         const dirZ = Math.cos(angle);
-        // Project point onto path direction
         const dot = x * dirX + z * dirZ;
-        if (dot > wallRadius - 2 && dot < wallRadius + 20) {
-          // Perpendicular distance from path center line
+        if (dot > wallRadius - 2 * S && dot < wallRadius + 20 * S) {
           const perpDist = Math.abs(x * dirZ - z * dirX);
-          if (perpDist < 2.5) flatten = true;
+          if (perpDist < 2.5 * S) flatten = true;
         }
       }
 
       // Ring path around castle
-      if (Math.abs(dist - ringRadius) < 2.5) flatten = true;
+      if (Math.abs(dist - ringRadius) < 2.5 * S) flatten = true;
 
       if (flatten) {
         positions.setZ(i, 0);
@@ -446,20 +441,21 @@ export class EnvironmentBuilder {
   }
 
   private getGateZ(tier: CastleTier): number {
+    const S = WORLD_SCALE;
     switch (tier) {
-      case 'hut': return 1.5;
-      case 'cottage': return 2;
-      case 'tower': return 2;
-      case 'keep': return 2;
-      case 'manor': return 3.5;
-      case 'castle': return 5.25;
-      case 'stronghold': return 7;
-      case 'fortress': return 8.5;
-      case 'palace': return 10.5;
-      case 'citadel': return 12.5;
-      case 'empire': return 14.5;
-      case 'legend': return 16.5;
-      default: return 5.25;
+      case 'hut': return 1.5 * S;
+      case 'cottage': return 2 * S;
+      case 'tower': return 2 * S;
+      case 'keep': return 2 * S;
+      case 'manor': return 3.5 * S;
+      case 'castle': return 5.25 * S;
+      case 'stronghold': return 7 * S;
+      case 'fortress': return 8.5 * S;
+      case 'palace': return 10.5 * S;
+      case 'citadel': return 12.5 * S;
+      case 'empire': return 14.5 * S;
+      case 'legend': return 16.5 * S;
+      default: return 5.25 * S;
     }
   }
 
@@ -471,10 +467,11 @@ export class EnvironmentBuilder {
   private flattenTerrainForLegendary(): void {
     if (!this.groundMesh) return;
 
+    const S = WORLD_SCALE;
     const geom = this.groundMesh.geometry;
     const positions = geom.attributes.position;
-    const wallRadius = 14; // citadel
-    const RING_R = wallRadius + 6; // = 20
+    const wallRadius = 14 * S; // citadel
+    const RING_R = wallRadius + 6 * S;
 
     for (let i = 0; i < positions.count; i++) {
       const x = positions.getX(i);
@@ -484,39 +481,38 @@ export class EnvironmentBuilder {
       let flatten = false;
 
       // Inner ceremonial zone (everything within ring + generous margin)
-      if (dist < RING_R + 8) flatten = true;
+      if (dist < RING_R + 8 * S) flatten = true;
 
       // Main avenue corridor: wide clearance along +Z from ring outward
-      if (Math.abs(x) < 6 && z > wallRadius) flatten = true;
+      if (Math.abs(x) < 6 * S && z > wallRadius) flatten = true;
 
       // Forward approach cone: broad clearance in front of castle
-      if (z > 0 && Math.abs(x) < z * 0.7 && dist < 45) flatten = true;
+      if (z > 0 && Math.abs(x) < z * 0.7 && dist < 45 * S) flatten = true;
 
       // Grand entrance plaza at (0, RING_R), radius 6 + margin
       const dzGrand = z - RING_R;
-      if (x * x + dzGrand * dzGrand < 9 * 9) flatten = true;
+      if (x * x + dzGrand * dzGrand < (9 * S) * (9 * S)) flatten = true;
 
       // Outer waypoint plaza at (0, RING_R+10), radius 3.5 + margin
-      const dzWay = z - (RING_R + 10);
-      if (x * x + dzWay * dzWay < 6 * 6) flatten = true;
+      const dzWay = z - (RING_R + 10 * S);
+      if (x * x + dzWay * dzWay < (6 * S) * (6 * S)) flatten = true;
 
       // Ring crossroad plazas at (±RING_R, 0), radius 2.8 + margin
       for (const side of [-1, 1]) {
         const dxR = x - side * RING_R;
-        if (dxR * dxR + z * z < 5.5 * 5.5) flatten = true;
+        if (dxR * dxR + z * z < (5.5 * S) * (5.5 * S)) flatten = true;
       }
 
       // Promenades: backward-curving corridors from ±X ring positions
       for (const side of [-1, 1]) {
-        if (side > 0 && x > RING_R - 4 && x < RING_R + 18 && z > -12 && z < 4) flatten = true;
-        if (side < 0 && x < -RING_R + 4 && x > -RING_R - 18 && z > -12 && z < 4) flatten = true;
+        if (side > 0 && x > RING_R - 4 * S && x < RING_R + 18 * S && z > -12 * S && z < 4 * S) flatten = true;
+        if (side < 0 && x < -RING_R + 4 * S && x > -RING_R - 18 * S && z > -12 * S && z < 4 * S) flatten = true;
       }
 
       // Rear processional path
-      if (Math.abs(x) < 4 && z < -RING_R + 3 && z > -RING_R - 15) flatten = true;
+      if (Math.abs(x) < 4 * S && z < -RING_R + 3 * S && z > -RING_R - 15 * S) flatten = true;
 
       if (flatten) {
-        // Set height to zero (plane Z = world Y height)
         positions.setZ(i, 0);
       }
     }
@@ -526,20 +522,21 @@ export class EnvironmentBuilder {
   }
 
   private getWallRadius(tier: CastleTier): number {
+    const S = WORLD_SCALE;
     switch (tier) {
-      case 'hut': return 2;
-      case 'cottage': return 3;
-      case 'tower': return 3.5;
-      case 'keep': return 4;
-      case 'manor': return 5.5;
-      case 'castle': return 7;
-      case 'stronghold': return 8.5;
-      case 'fortress': return 10;
-      case 'palace': return 12;
-      case 'citadel': return 14;
-      case 'empire': return 16;
-      case 'legend': return 18;
-      default: return 7;
+      case 'hut': return 2 * S;
+      case 'cottage': return 3 * S;
+      case 'tower': return 3.5 * S;
+      case 'keep': return 4 * S;
+      case 'manor': return 5.5 * S;
+      case 'castle': return 7 * S;
+      case 'stronghold': return 8.5 * S;
+      case 'fortress': return 10 * S;
+      case 'palace': return 12 * S;
+      case 'citadel': return 14 * S;
+      case 'empire': return 16 * S;
+      case 'legend': return 18 * S;
+      default: return 7 * S;
     }
   }
 
@@ -816,11 +813,11 @@ export class EnvironmentBuilder {
     }
 
     const hillPositions = [
-      { x: -30, z: -25 },
-      { x: 25, z: -30 },
-      { x: -20, z: -35 },
-      { x: 35, z: -20 },
-      { x: 0, z: -40 }
+      { x: -30 * WORLD_SCALE, z: -25 * WORLD_SCALE },
+      { x: 25 * WORLD_SCALE, z: -30 * WORLD_SCALE },
+      { x: -20 * WORLD_SCALE, z: -35 * WORLD_SCALE },
+      { x: 35 * WORLD_SCALE, z: -20 * WORLD_SCALE },
+      { x: 0, z: -40 * WORLD_SCALE }
     ];
 
     for (let i = 0; i < this.hills.length; i++) {
@@ -830,7 +827,7 @@ export class EnvironmentBuilder {
       if (!pos) continue;
 
       const dist = Math.sqrt(pos.x * pos.x + pos.z * pos.z);
-      const distanceFactor = Math.min(1, dist / 50);
+      const distanceFactor = Math.min(1, dist / (50 * WORLD_SCALE));
 
       // Atmospheric perspective: distant hills blend toward atmosphere color
       // At night, INCREASE scattering — moonlit haze makes distant hills

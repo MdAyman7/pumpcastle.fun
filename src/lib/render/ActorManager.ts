@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import type { RenderState } from '$lib/types';
 import { seededRandom } from '$lib/state/CastleState';
+import { WORLD_SCALE } from '$lib/state/CastleConstants';
 import { qualitySettings } from './QualitySettings';
 
 // Guard patrol path point
@@ -110,6 +111,7 @@ export class ActorManager {
 
     this.actorGroup = new THREE.Group();
     this.actorGroup.name = 'actors';
+    this.actorGroup.scale.setScalar(WORLD_SCALE);
     this.scene.add(this.actorGroup);
 
     // Smoke Points system

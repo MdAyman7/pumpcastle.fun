@@ -9,6 +9,7 @@
  */
 
 import type { CastleTier } from '$lib/types';
+import { WORLD_SCALE } from '$lib/state/CastleConstants';
 
 // ── Primitives ───────────────────────────────────────────────
 
@@ -51,56 +52,59 @@ export interface PushResult {
 // ── Tier → geometry mapping ──────────────────────────────────
 
 function getWallRadius(tier: CastleTier): number {
+  const S = WORLD_SCALE;
   switch (tier) {
-    case 'hut': return 2;
-    case 'cottage': return 3;
-    case 'tower': return 3.5;
-    case 'keep': return 4;
-    case 'manor': return 5.5;
-    case 'castle': return 7;
-    case 'stronghold': return 8.5;
-    case 'fortress': return 10;
-    case 'palace': return 12;
-    case 'citadel': return 14;
-    case 'empire': return 16;
-    case 'legend': return 18;
-    default: return 7;
+    case 'hut': return 2 * S;
+    case 'cottage': return 3 * S;
+    case 'tower': return 3.5 * S;
+    case 'keep': return 4 * S;
+    case 'manor': return 5.5 * S;
+    case 'castle': return 7 * S;
+    case 'stronghold': return 8.5 * S;
+    case 'fortress': return 10 * S;
+    case 'palace': return 12 * S;
+    case 'citadel': return 14 * S;
+    case 'empire': return 16 * S;
+    case 'legend': return 18 * S;
+    default: return 7 * S;
   }
 }
 
 function getGateZ(tier: CastleTier): number {
+  const S = WORLD_SCALE;
   switch (tier) {
-    case 'hut': return 1.5;
-    case 'cottage': return 2;
-    case 'tower': return 2;
-    case 'keep': return 2;
-    case 'manor': return 3.5;
-    case 'castle': return 5.25;
-    case 'stronghold': return 7;
-    case 'fortress': return 8.5;
-    case 'palace': return 10.5;
-    case 'citadel': return 12.5;
-    case 'empire': return 14.5;
-    case 'legend': return 16.5;
-    default: return 5.25;
+    case 'hut': return 1.5 * S;
+    case 'cottage': return 2 * S;
+    case 'tower': return 2 * S;
+    case 'keep': return 2 * S;
+    case 'manor': return 3.5 * S;
+    case 'castle': return 5.25 * S;
+    case 'stronghold': return 7 * S;
+    case 'fortress': return 8.5 * S;
+    case 'palace': return 10.5 * S;
+    case 'citadel': return 12.5 * S;
+    case 'empire': return 14.5 * S;
+    case 'legend': return 16.5 * S;
+    default: return 5.25 * S;
   }
 }
 
 function getWallHeight(tier: CastleTier): number {
+  const S = WORLD_SCALE;
   switch (tier) {
-    case 'hut': return 2.5;
-    case 'cottage': return 3;
-    case 'tower': return 7;
-    case 'keep': return 5;
-    case 'manor': return 4;
-    case 'castle': return 3;
-    case 'stronghold': return 4;
-    case 'fortress': return 4;
-    case 'palace': return 5;
-    case 'citadel': return 5;
-    case 'empire': return 6;
-    case 'legend': return 7;
-    default: return 4;
+    case 'hut': return 2.5 * S;
+    case 'cottage': return 3 * S;
+    case 'tower': return 7 * S;
+    case 'keep': return 5 * S;
+    case 'manor': return 4 * S;
+    case 'castle': return 3 * S;
+    case 'stronghold': return 4 * S;
+    case 'fortress': return 4 * S;
+    case 'palace': return 5 * S;
+    case 'citadel': return 5 * S;
+    case 'empire': return 6 * S;
+    case 'legend': return 7 * S;
+    default: return 4 * S;
   }
 }
 
@@ -117,26 +121,28 @@ function getTowerCount(tier: CastleTier): number {
 }
 
 function getTowerRadius(tier: CastleTier): number {
+  const S = WORLD_SCALE;
   switch (tier) {
-    case 'stronghold': return 1.2;
-    case 'fortress': return 1.3;
-    case 'palace': return 1.5;
-    case 'citadel': return 1.5;
-    case 'empire': return 1.8;
-    case 'legend': return 2.0;
-    default: return 1.0;
+    case 'stronghold': return 1.2 * S;
+    case 'fortress': return 1.3 * S;
+    case 'palace': return 1.5 * S;
+    case 'citadel': return 1.5 * S;
+    case 'empire': return 1.8 * S;
+    case 'legend': return 2.0 * S;
+    default: return 1.0 * S;
   }
 }
 
 function getTowerHeight(tier: CastleTier): number {
+  const S = WORLD_SCALE;
   switch (tier) {
-    case 'stronghold': return 6;
-    case 'fortress': return 7;
-    case 'palace': return 8;
-    case 'citadel': return 9;
-    case 'empire': return 10;
-    case 'legend': return 12;
-    default: return 6;
+    case 'stronghold': return 6 * S;
+    case 'fortress': return 7 * S;
+    case 'palace': return 8 * S;
+    case 'citadel': return 9 * S;
+    case 'empire': return 10 * S;
+    case 'legend': return 12 * S;
+    default: return 6 * S;
   }
 }
 
@@ -146,7 +152,7 @@ export class CollisionWorld {
   primitives: CollisionPrimitive[] = [];
   groundY = 0;
   /** World-space boundary: character can't roam beyond this radius. */
-  worldBoundary = 45;
+  worldBoundary = 45 * WORLD_SCALE;
 
   // ── Build ──────────────────────────────────────────────────
 
@@ -157,19 +163,21 @@ export class CollisionWorld {
     const wallH = getWallHeight(tier);
     const _gateZ = getGateZ(tier);
 
+    const S = WORLD_SCALE;
+
     // Gate opening angle: gate is at +Z, opening ~2.5 units wide
-    const gateHalfWidth = 1.5;
+    const gateHalfWidth = 1.5 * S;
     const gateAngle = Math.PI / 2; // +Z direction in our coordinate system is angle=π/2
     const gateHalfArc = Math.atan2(gateHalfWidth, wallR);
 
     // Small tiers (box-based structures)
     if (tier === 'hut' || tier === 'cottage' || tier === 'keep') {
-      const halfW = tier === 'hut' ? 1 : tier === 'cottage' ? 1.5 : 1.5;
+      const halfW = (tier === 'hut' ? 1 : tier === 'cottage' ? 1.5 : 1.5) * S;
       const halfD = halfW;
       const h = wallH;
 
       // Four walls as thin AABBs with gate opening in front (+Z)
-      const wallThick = 0.4;
+      const wallThick = 0.4 * S;
 
       // Back wall
       this.primitives.push({
@@ -191,7 +199,7 @@ export class CollisionWorld {
       });
       // Front wall — two sections flanking the gate
       // Gate opening is ~1.2 units wide centered at x=0
-      const gateHalf = 0.6;
+      const gateHalf = 0.6 * S;
       this.primitives.push({
         type: 'aabb',
         minX: -halfW, minY: 0, minZ: halfD,
@@ -210,7 +218,7 @@ export class CollisionWorld {
       this.primitives.push({
         type: 'cylinder',
         cx: 0, cz: 0,
-        radius: 1.5,
+        radius: 1.5 * S,
         minY: 0, maxY: wallH,
       });
       return;
@@ -221,24 +229,24 @@ export class CollisionWorld {
       // Main hall
       this.primitives.push({
         type: 'aabb',
-        minX: -4, minY: 0, minZ: -3,
-        maxX: 4, maxY: 4, maxZ: 3,
+        minX: -4 * S, minY: 0, minZ: -3 * S,
+        maxX: 4 * S, maxY: 4 * S, maxZ: 3 * S,
       });
       // Side wing
       this.primitives.push({
         type: 'aabb',
-        minX: -2.5, minY: 0, minZ: 3,
-        maxX: 2.5, maxY: 3.5, maxZ: 5.5,
+        minX: -2.5 * S, minY: 0, minZ: 3 * S,
+        maxX: 2.5 * S, maxY: 3.5 * S, maxZ: 5.5 * S,
       });
       return;
     }
 
     // Castle tier: box-based walls
     if (tier === 'castle') {
-      const halfW = 5;
-      const halfD = 5;
-      const wallThick = 0.5;
-      const h = 3;
+      const halfW = 5 * S;
+      const halfD = 5 * S;
+      const wallThick = 0.5 * S;
+      const h = 3 * S;
 
       // Back wall
       this.primitives.push({
@@ -262,11 +270,11 @@ export class CollisionWorld {
       this.primitives.push({
         type: 'aabb',
         minX: -halfW, minY: 0, minZ: halfD,
-        maxX: -1.2, maxY: h, maxZ: halfD + wallThick,
+        maxX: -1.2 * S, maxY: h, maxZ: halfD + wallThick,
       });
       this.primitives.push({
         type: 'aabb',
-        minX: 1.2, minY: 0, minZ: halfD,
+        minX: 1.2 * S, minY: 0, minZ: halfD,
         maxX: halfW, maxY: h, maxZ: halfD + wallThick,
       });
       // 4 corner towers
@@ -274,16 +282,16 @@ export class CollisionWorld {
         this.primitives.push({
           type: 'cylinder',
           cx: tx, cz: tz,
-          radius: 1.2,
-          minY: 0, maxY: 5,
+          radius: 1.2 * S,
+          minY: 0, maxY: 5 * S,
         });
       }
       // Central keep
       this.primitives.push({
         type: 'cylinder',
         cx: 0, cz: 0,
-        radius: 2.5,
-        minY: 0, maxY: 7,
+        radius: 2.5 * S,
+        minY: 0, maxY: 7 * S,
       });
       return;
     }
@@ -294,7 +302,7 @@ export class CollisionWorld {
       type: 'wallRing',
       cx: 0, cz: 0,
       radius: wallR,
-      thickness: 0.6,
+      thickness: 0.6 * S,
       minY: 0, maxY: wallH,
       gateAngle,
       gateHalfArc,
@@ -307,8 +315,8 @@ export class CollisionWorld {
         type: 'wallRing',
         cx: 0, cz: 0,
         radius: innerRadius,
-        thickness: 0.5,
-        minY: 0, maxY: wallH + 1,
+        thickness: 0.5 * S,
+        minY: 0, maxY: wallH + 1 * S,
         gateAngle,
         gateHalfArc: gateHalfArc * 1.2, // inner gate slightly wider
       });
@@ -341,31 +349,33 @@ export class CollisionWorld {
         type: 'cylinder',
         cx: 0, cz: 0,
         radius: keepR,
-        minY: 0, maxY: wallH + 3,
+        minY: 0, maxY: wallH + 3 * S,
       });
     }
   }
 
   private getInnerRadius(tier: CastleTier): number {
+    const S = WORLD_SCALE;
     switch (tier) {
-      case 'stronghold': return 4;
-      case 'fortress': return 5;
-      case 'palace': return 6;
-      case 'citadel': return 8;
-      case 'empire': return 9;
-      case 'legend': return 10;
+      case 'stronghold': return 4 * S;
+      case 'fortress': return 5 * S;
+      case 'palace': return 6 * S;
+      case 'citadel': return 8 * S;
+      case 'empire': return 9 * S;
+      case 'legend': return 10 * S;
       default: return 0;
     }
   }
 
   private getKeepRadius(tier: CastleTier): number {
+    const S = WORLD_SCALE;
     switch (tier) {
-      case 'stronghold': return 2;
-      case 'fortress': return 2.5;
-      case 'palace': return 3;
-      case 'citadel': return 3.5;
-      case 'empire': return 4;
-      case 'legend': return 4.5;
+      case 'stronghold': return 2 * S;
+      case 'fortress': return 2.5 * S;
+      case 'palace': return 3 * S;
+      case 'citadel': return 3.5 * S;
+      case 'empire': return 4 * S;
+      case 'legend': return 4.5 * S;
       default: return 0;
     }
   }
@@ -595,10 +605,12 @@ export class CollisionWorld {
   getSpawnPosition(tier: CastleTier): { x: number; y: number; z: number } {
     const wallR = getWallRadius(tier);
     const gateZ = getGateZ(tier);
+    // Capsule center must be high enough for feet (center - halfHeight - radius) to touch ground.
+    // halfHeight = 0.5 * WORLD_SCALE, radius = 0.3 * WORLD_SCALE → center Y = 0.8 * WORLD_SCALE
     return {
       x: 0,
-      y: 0.8, // capsule center above ground
-      z: gateZ + wallR + 3, // a bit outside the gate
+      y: 0.8 * WORLD_SCALE, // capsule center above ground
+      z: gateZ + wallR + 3 * WORLD_SCALE, // a bit outside the gate
     };
   }
 }

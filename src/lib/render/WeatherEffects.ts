@@ -19,7 +19,7 @@
 import * as THREE from 'three';
 import type { WeatherRenderState } from '$lib/state/WeatherState';
 import { qualitySettings } from './QualitySettings';
-import { WEATHER } from '$lib/state/CastleConstants';
+import { WEATHER, WORLD_SCALE } from '$lib/state/CastleConstants';
 
 interface RainParticle {
   x: number; y: number; z: number;
@@ -128,6 +128,7 @@ export class WeatherEffects {
     this.scene = scene;
     this.group = new THREE.Group();
     this.group.name = 'weatherEffects';
+    this.group.scale.setScalar(WORLD_SCALE);
     this.scene.add(this.group);
 
     const qc = qualitySettings.getConfig();

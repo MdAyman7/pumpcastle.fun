@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import type { RenderState } from '$lib/types';
 import type { WeatherRenderState } from '$lib/state/WeatherState';
 import { seededRandom } from '$lib/state/CastleState';
+import { WORLD_SCALE } from '$lib/state/CastleConstants';
 
 interface SwayingElement {
   mesh: THREE.Object3D;
@@ -71,6 +72,7 @@ export class PhysicsMotion {
 
     this.physicsGroup = new THREE.Group();
     this.physicsGroup.name = 'physics';
+    this.physicsGroup.scale.setScalar(WORLD_SCALE);
     this.scene.add(this.physicsGroup);
   }
 
